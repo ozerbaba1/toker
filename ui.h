@@ -71,8 +71,12 @@ inline float g_last_rect[4] = { 0.f, 0.f, 0.f, 0.f };
 inline bool g_glass_live = false;
 
 inline void capture_backdrop() {
+    // Keep the last valid glass frame between refreshes. glReadPixels is a
+    // synchronous GPU/CPU readback, so refreshing every frame causes stalls.
+    static unsigned refresh_tick = 0;
+    if (!C::glass) { g_glass_live = false; return; }
+    if (g_glass_live && (++refresh_tick % 4u) != 0u) return;
     g_glass_live = false;
-    if (!C::glass) return;
     if (g_last_rect[2] < 64.f || g_last_rect[3] < 64.f) return;
 
     ImVec2 ds = ImGui::GetIO().DisplaySize;
@@ -138,10 +142,13 @@ inline ImTextureRef glass_tex() {
 
 // the outer window: shadow, blurred scene, darkening coat, sheen, hairlines
 inline void glass_shell(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float r) {
-    for (int i = 8; i >= 1; i--) {
-        float g = i * 5.f;
-        dl->AddRectFilled(ImVec2(p0.x - g, p0.y - g + 2.f), ImVec2(p1.x + g, p1.y + g + 6.f),
-                          IM_COL32(0, 0, 0, (int)(8.f - i * .7f)), r + g * .7f);
+    // Layered ambient shadow: broad, quiet falloff rather than a neon halo.
+    for (int i = 10; i >= 1; --i) {
+        const float spread = 2.5f + i * 3.4f;
+        const int alpha = (int)(1.2f + (10 - i) * .48f);
+        dl->AddRectFilled(ImVec2(p0.x - spread, p0.y - spread + 3.f),
+                          ImVec2(p1.x + spread, p1.y + spread + 7.f),
+                          IM_COL32(0, 0, 0, alpha), r + spread);
     }
     if (g_glass_live && g_backdrop_tex) {
         dl->AddImageRounded(glass_tex(), p0, p1, ImVec2(0.f, 1.f), ImVec2(1.f, 0.f),
@@ -153,9 +160,13 @@ inline void glass_shell(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float r) {
     dl->AddRectFilledMultiColor(ImVec2(p0.x + r, p0.y + 1.f), ImVec2(p1.x - r, p0.y + 150.f),
                                 IM_COL32(255, 255, 255, 13), IM_COL32(255, 255, 255, 10),
                                 IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
-    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 30), r, 0, 1.f);
+    // Crisp inner hairline and restrained top-edge reflection.
+    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 38), r, 0, 1.f);
     dl->AddRect(ImVec2(p0.x + 1.f, p0.y + 1.f), ImVec2(p1.x - 1.f, p1.y - 1.f),
-                IM_COL32(255, 255, 255, 9), r - 1.f, 0, 1.f);
+                IM_COL32(255, 255, 255, 12), r - 1.f, 0, 1.f);
+    dl->AddLine(ImVec2(p0.x + r + 8.f, p0.y + 1.5f),
+                ImVec2(p1.x - r - 8.f, p0.y + 1.5f),
+                IM_COL32(255, 255, 255, 24), 1.f);
 }
 
 // ---------------------------------------------------------------------------
@@ -314,9 +325,9 @@ inline Card card_begin(ImVec2 pos, float w, const char* title, const char* sub, 
     c.dl->ChannelsSetCurrent(1);
 
     // accent dot + title
-    c.dl->AddCircleFilled(ImVec2(pos.x + 18.f, pos.y + 22.f), 3.f, with_a(ACCENT_A, c.enabled ? .95f : .32f));
-    c.dl->AddCircle(ImVec2(pos.x + 18.f, pos.y + 22.f), 5.f, with_a(ACCENT_A, c.enabled ? .14f : .06f), 16, 1.f);
-    c.dl->AddText(f_bold, 14.5f, ImVec2(pos.x + 28.f, pos.y + 14.f), scale_a(TEXT, c.dim()), title);
+    c.dl->AddCircleFilled(ImVec2(pos.x + 18.f, pos.y + 22.f), 2.5f, with_a(ACCENT_A, c.enabled ? .92f : .28f));
+    c.dl->AddCircle(ImVec2(pos.x + 18.f, pos.y + 22.f), 6.f, with_a(ACCENT_A, c.enabled ? .10f : .035f), 20, 1.f);
+    c.dl->AddText(f_bold, 14.5f, ImVec2(pos.x + 30.f, pos.y + 14.f), scale_a(TEXT, c.dim()), title);
     if (sub) c.dl->AddText(f_small, 11.f, ImVec2(pos.x + 18.f, pos.y + 33.f), scale_a(DIM2, c.dim()), sub);
 
     if (toggle) {
@@ -336,11 +347,19 @@ inline float card_end(Card& c) {
     bool hov = ImGui::IsMouseHoveringRect(c.p0, p1);
 
     c.dl->ChannelsSetCurrent(0);
-    c.dl->AddRectFilled(c.p0, p1, hov ? CARD_HOV : CARD_BG, 12.f);
-    c.dl->AddRectFilledMultiColor(ImVec2(c.p0.x + 1.f, c.p0.y + 1.f), ImVec2(p1.x - 1.f, c.p0.y + 48.f),
-                                  IM_COL32(255, 255, 255, 9), IM_COL32(255, 255, 255, 6),
+    c.dl->AddRectFilled(c.p0, p1, hov ? CARD_HOV : CARD_BG, 15.f);
+    // Frosted card face: soft top sheen, lower glass tint and double hairline.
+    c.dl->AddRectFilledMultiColor(ImVec2(c.p0.x + 1.f, c.p0.y + 1.f),
+                                  ImVec2(p1.x - 1.f, c.p0.y + 66.f),
+                                  IM_COL32(255, 255, 255, 13), IM_COL32(255, 255, 255, 8),
                                   IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
-    c.dl->AddRect(c.p0, p1, hov ? IM_COL32(255, 255, 255, 42) : STROKE, 12.f, 0, 1.f);
+    c.dl->AddRectFilledMultiColor(ImVec2(c.p0.x + 1.f, c.p0.y + 66.f),
+                                  ImVec2(p1.x - 1.f, p1.y - 1.f),
+                                  IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0),
+                                  IM_COL32(0, 0, 0, 12), IM_COL32(0, 0, 0, 12));
+    c.dl->AddRect(c.p0, p1, hov ? IM_COL32(255, 255, 255, 48) : IM_COL32(255, 255, 255, 25), 15.f, 0, 1.f);
+    c.dl->AddRect(ImVec2(c.p0.x + 1.f, c.p0.y + 1.f), ImVec2(p1.x - 1.f, p1.y - 1.f),
+                  IM_COL32(255, 255, 255, 7), 14.f, 0, 1.f);
     c.dl->ChannelsMerge();
 
     ImGui::PopID();
