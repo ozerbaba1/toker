@@ -254,7 +254,7 @@ static int __cdecl hkSDM(int f){
                 glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
             }
             glColor4f(C::handC[0],C::handC[1],C::handC[2],C::handAlpha);
-            if(C::handM==2){
+            if(C::handM==1){
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
                 glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
