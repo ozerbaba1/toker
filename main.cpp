@@ -260,7 +260,6 @@ static int __cdecl hkSDM(int f){
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_LIGHTING);
     glEnable(GL_BLEND);
-    glDepthMask(GL_FALSE);
 
     const float alpha=std::max(0.f,std::min(1.f,C::handAlpha));
     const float pulse=(C::handM==3)
@@ -284,11 +283,16 @@ static int __cdecl hkSDM(int f){
     }else{
         // Glass and Pulse: translucent body + broad additive edges +
         // a narrow, brighter wire pass. Pulse animates only the local accent.
+        // Let the translucent base establish the model depth, then draw
+        // the luminous edge at equal depth without writing it again.
+        glDepthMask(GL_TRUE);
         glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
         glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
         glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*(C::handM==2?.20f:.15f));
         result=oSDM(f);
 
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
         glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
         glBlendFunc(GL_SRC_ALPHA,GL_ONE);
         glLineWidth(std::min(5.f,C::handLineWidth*2.4f));
