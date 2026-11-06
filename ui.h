@@ -1210,13 +1210,13 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
 // ---------------------------------------------------------------------------
 // menu
 // ---------------------------------------------------------------------------
-inline const char* k_pages[] = { "Visuals", "Aim", "World", "Misc", "Config" };
+inline const char* k_pages[] = { "Visuals", "Aim", "World", "Interface", "Profiles" };
 inline const char* k_subs[] = {
-    "esp, chams, crosshair, viewmodel",
-    "aimbot, triggerbot, recoil",
-    "fog, lighting, radar, effects",
-    "movement, interface, data center",
-    "save, load, build info",
+    "render settings and appearance",
+    "input controls and sensitivity",
+    "atmosphere and environment",
+    "overlay, motion and telemetry",
+    "save, load and preferences",
 };
 
 inline int& page_index() { static int p = 0; return p; }
@@ -1250,7 +1250,8 @@ inline void draw(State& st, bool* open) {
     ImVec2 ws = ImGui::GetWindowSize();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    const float RAIL = 224.f;
+    // Give the content area more room on narrow GoldSrc resolutions.
+    const float RAIL = ws.x < 820.f ? 188.f : 224.f;
     const float HEAD = 84.f;
 
     // shell: real blurred backdrop + glass coats
@@ -1316,9 +1317,10 @@ inline void draw(State& st, bool* open) {
             dl->AddText(f_small, 8.5f, ImVec2(x, by + 32.f), DIM2, lab);
             dl->AddText(f_bold, 15.f, ImVec2(x, by + 44.f), TEXT, val);
         };
+        const float statCol = (RAIL - 52.f) / 3.f;
         snprintf(sv, sizeof(sv), "%.0f", st.fps);      stat(wp.x + 26.f, "FPS", sv);
-        snprintf(sv, sizeof(sv), "%d", st.players);    stat(wp.x + 90.f, "PLAYERS", sv);
-        snprintf(sv, sizeof(sv), "%.0f", st.speed);    stat(wp.x + 162.f, "SPEED", sv);
+        snprintf(sv, sizeof(sv), "%d", st.players);    stat(wp.x + 26.f + statCol, "PLAYERS", sv);
+        snprintf(sv, sizeof(sv), "%.0f", st.speed);    stat(wp.x + 26.f + statCol * 2.f, "SPEED", sv);
 
         fps_graph(dl, ImVec2(wp.x + 26.f, by + 76.f), RAIL - 52.f, 36.f, TEXT);
         }
@@ -1330,7 +1332,7 @@ inline void draw(State& st, bool* open) {
         dl->AddText(f_small, 10.5f, ImVec2(wp.x + 38.f, fy + 13.f), DIM,
                     st.eng ? "engine attached" : "waiting for engine");
         dl->AddText(f_small, 9.f, ImVec2(wp.x + 27.f, fy + 31.f), DIM2,
-                    "build 2.1   \xC2\xB7   kindmops");
+                    "TOKER  /  GLASS INTERFACE");
     }
 
     // header
