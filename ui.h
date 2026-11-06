@@ -899,6 +899,7 @@ struct State {
 // pages
 // ---------------------------------------------------------------------------
 inline const char* k_glass_quality[] = { "Performance", "Balanced", "Smooth" };
+inline const char* k_fog_modes[] = { "Linear", "Exponential", "Exponential squared" };
 inline const char* k_esp_styles[] = { "Box", "Corner" };
 inline const char* k_chams[] = { "Off", "Flat", "Wire", "Glow", "Rainbow" };
 inline const char* k_hand[] = { "Flat", "Wire" };
@@ -965,14 +966,51 @@ inline void page_visuals(ImVec2 o, float full) {
     Card c = card_begin(ImVec2(xl, yl), colw, "ViewModel", "hands & offset", &C::hand);
     combo_row(c, "Style", &C::handM, k_hand, 2);
     color_row(c, "Hand color", C::handC);
+    slider_row(c, "Opacity", &C::handAlpha, .05f, 1.f, "%.2f");
+    if (C::handM == 1)
+        slider_row(c, "Wire width", &C::handLineWidth, .5f, 5.f, "%.1f");
     drag3_row(c, "XYZ offset", C::vmOfs, -5.f, 5.f, .05f);
     yl = card_end(c) + gap;
 
-    Card d = card_begin(ImVec2(xr, yr), colw, "Crosshair", "custom crosshair", &C::xhair);
+    Card d = card_begin(ImVec2(xr, yr), colw, "Crosshair", "reticle appearance", &C::xhair);
     slider_row(d, "Length", &C::xhSize, 1.f, 20.f, "%.1f");
     slider_row(d, "Gap", &C::xhGap, 0.f, 10.f, "%.1f");
     slider_row(d, "Thickness", &C::xhThick, .5f, 4.f, "%.1f");
     color_row(d, "Color", C::xhCol, true);
+    check_row(d, "Center dot", &C::xhDot);
+    check_row(d, "Dark outline", &C::xhOutline);
+    section_label(d, "LIVE PREVIEW");
+    {
+        const float pw = d.cw();
+        const float ph = 62.f;
+        const ImVec2 pp(d.x(), d.py());
+        d.dl->AddRectFilled(pp, ImVec2(pp.x + pw, pp.y + ph),
+                            IM_COL32(8, 9, 12, 175), 9.f);
+        d.dl->AddRect(pp, ImVec2(pp.x + pw, pp.y + ph),
+                      IM_COL32(255, 255, 255, 20), 9.f, 0, 1.f);
+        const float px = pp.x + pw * .5f, py = pp.y + ph * .5f;
+        const float gapPreview = std::min(12.f, C::xhGap * .7f);
+        const float lenPreview = std::min(24.f, C::xhSize * 1.15f);
+        const float thickPreview = std::max(1.f, C::xhThick);
+        const float alphaPreview = clamp01(C::xhCol[3]);
+        const ImU32 preview = IM_COL32((int)(C::xhCol[0] * 255),
+            (int)(C::xhCol[1] * 255), (int)(C::xhCol[2] * 255),
+            (int)(alphaPreview * 255));
+        const ImU32 outline = IM_COL32(0, 0, 0, (int)(alphaPreview * 220));
+        auto previewLine = [&](ImVec2 a, ImVec2 b) {
+            if (C::xhOutline) d.dl->AddLine(a, b, outline, thickPreview + 2.f);
+            d.dl->AddLine(a, b, preview, thickPreview);
+        };
+        previewLine(ImVec2(px-gapPreview-lenPreview,py),ImVec2(px-gapPreview,py));
+        previewLine(ImVec2(px+gapPreview,py),ImVec2(px+gapPreview+lenPreview,py));
+        previewLine(ImVec2(px,py-gapPreview-lenPreview),ImVec2(px,py-gapPreview));
+        previewLine(ImVec2(px,py+gapPreview),ImVec2(px,py+gapPreview+lenPreview));
+        if (C::xhDot) {
+            if (C::xhOutline) d.dl->AddCircleFilled(ImVec2(px,py),3.f,outline,16);
+            d.dl->AddCircleFilled(ImVec2(px,py),std::max(1.f,thickPreview*.7f),preview,16);
+        }
+        d.y += ph + 9.f;
+    }
     yr = card_end(d) + gap;
 
     ImGui::SetCursorScreenPos(ImVec2(o.x, std::max(yl, yr)));
@@ -1023,8 +1061,13 @@ inline void page_world(ImVec2 o, float full) {
     Card a = card_begin(ImVec2(o.x, y), colw, "Environment", "fog & lighting", nullptr);
     check_row(a, "Fog", &C::fogOn);
     color_row(a, "Fog color", C::fogC);
-    slider_row(a, "Start", &C::fogS, 0.f, 2000.f, "%.0f");
-    slider_row(a, "End", &C::fogE, 500.f, 8000.f, "%.0f");
+    combo_row(a, "Fog model", &C::fogMode, k_fog_modes, 3);
+    if (C::fogMode == 0) {
+        slider_row(a, "Start", &C::fogS, 0.f, 2000.f, "%.0f");
+        slider_row(a, "End", &C::fogE, 500.f, 8000.f, "%.0f");
+    } else {
+        slider_row(a, "Density", &C::fogDensity, .001f, .15f, "%.3f");
+    }
     section_label(a, "LIGHTING");
     check_row(a, "Night mode", &C::nightMode);
     slider_row(a, "Darkness", &C::nightAlpha, .1f, .8f, "%.2f");
