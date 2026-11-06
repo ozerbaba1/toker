@@ -12,6 +12,8 @@ namespace C {
     // interface
     bool glass = true;          // real backdrop blur behind the menu
     bool reduceMotion = false;  // shorter, calmer animations
+    float glassOpacity = .82f;  // dark glass coat strength
+    int glassQuality = 1;       // 0 = performance, 1 = balanced, 2 = smooth
 
     // esp
     bool esp = true; int espStyle = 1;                 // 0 = box, 1 = corner
@@ -86,6 +88,8 @@ namespace cfg {
             { "menuKey",     T_INT,  &C::menuKey },
             { "glass",       T_BOOL, &C::glass },
             { "reduceMotion",T_BOOL, &C::reduceMotion },
+            { "glassOpacity",T_F3,   &C::glassOpacity },
+            { "glassQuality",T_INT,  &C::glassQuality },
             { "esp",         T_BOOL, &C::esp },
             { "espStyle",    T_INT,  &C::espStyle },
             { "espBox",      T_BOOL, &C::espBox },
@@ -154,7 +158,7 @@ namespace cfg {
     // F3 entries whose pointer is a lone float (scalar-in-vec hack) need special handling.
     inline bool scalar_f3(const char* key) {
         return !strcmp(key, "xhSize") || !strcmp(key, "xhGap") ||
-               !strcmp(key, "xhThick") || !strcmp(key, "fogS") ||
+               !strcmp(key, "glassOpacity") || !strcmp(key, "xhThick") || !strcmp(key, "fogS") ||
                !strcmp(key, "fogE") || !strcmp(key, "nightAlpha") ||
                !strcmp(key, "aimFov") || !strcmp(key, "aimSmooth") ||
                !strcmp(key, "trigFov") || !strcmp(key, "rcsF") ||
@@ -227,6 +231,7 @@ namespace cfg {
     inline void reset() {
         C::watermark = true; C::menuKey = VK_INSERT;
         C::glass = true; C::reduceMotion = false;
+        C::glassOpacity = .82f; C::glassQuality = 1;
         C::esp = true; C::espStyle = 1;
         C::espBox = true;
         C::espName = true; C::espDist = true; C::espSnap = false;
