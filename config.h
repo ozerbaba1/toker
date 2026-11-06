@@ -33,7 +33,7 @@ namespace C {
     float chCV[3] = { 0.f, .55f, 1.f }, chCW[3] = { 0.f, .2f, 1.f };
 
     // viewmodel
-    bool hand = false; int handM = 1; float handC[3] = { 0.f, .9f, .4f };
+    bool hand = false; int handM = 0; float handC[3] = { 0.f, .9f, .4f };
     float handAlpha = 1.f, handLineWidth = 1.5f;
     float vmOfs[3] = { 0.f, 0.f, 0.f };
 
@@ -267,7 +267,7 @@ namespace cfg {
         C::chTW[0] = 1.f; C::chTW[1] = .2f; C::chTW[2] = 0.f;
         C::chCV[0] = 0.f; C::chCV[1] = .55f; C::chCV[2] = 1.f;
         C::chCW[0] = 0.f; C::chCW[1] = .2f; C::chCW[2] = 1.f;
-        C::hand = false; C::handM = 1; C::handC[0] = 0.f; C::handC[1] = .9f; C::handC[2] = .4f;
+        C::hand = false; C::handM = 0; C::handC[0] = 0.f; C::handC[1] = .9f; C::handC[2] = .4f;
         C::handAlpha = 1.f; C::handLineWidth = 1.5f;
         C::vmOfs[0] = C::vmOfs[1] = C::vmOfs[2] = 0.f;
         C::xhair = false; C::xhSize = 6.f; C::xhGap = 2.f; C::xhThick = 1.5f;
