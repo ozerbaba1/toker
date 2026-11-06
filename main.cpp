@@ -234,40 +234,76 @@ static void __cdecl hkHPM(playermove_t*p,int s){G::pm=p;oHPM(p,s);}
 // ============================================================================
 typedef int(__cdecl*SDM_t)(int);static SDM_t oSDM=0;
 static int __cdecl hkSDM(int f){
-    // viewmodel xyz offset
+    // GoldSrc renders the local weapon/hands in a separate depth range.
+    // Keep every material pass confined to that local viewmodel path.
+    GLfloat dr[2]={0.f,1.f};
+    glGetFloatv(GL_DEPTH_RANGE,dr);
+    const bool isViewModel = dr[1] < 0.5f;
+    const bool hasOffset = C::vmOfs[0]!=0.f || C::vmOfs[1]!=0.f || C::vmOfs[2]!=0.f;
     bool pushed=false;
-    if(C::vmOfs[0]!=0||C::vmOfs[1]!=0||C::vmOfs[2]!=0){
-        GLfloat dr[2];glGetFloatv(GL_DEPTH_RANGE,dr);
-        if(dr[1]<0.5f){
-            glPushMatrix();
-            glTranslatef(C::vmOfs[0],C::vmOfs[1],C::vmOfs[2]);
-            pushed=true;
-        }
+
+    if(isViewModel && hasOffset){
+        glPushMatrix();
+        glTranslatef(C::vmOfs[0],C::vmOfs[1],C::vmOfs[2]);
+        pushed=true;
     }
-    if(C::hand){
-        GLfloat dr[2];glGetFloatv(GL_DEPTH_RANGE,dr);
-        if(dr[1]<0.5f){
-            glPushAttrib(GL_ALL_ATTRIB_BITS);
-            glDisable(GL_TEXTURE_2D);
-            if(C::handAlpha < .999f){
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-            }
-            glColor4f(C::handC[0],C::handC[1],C::handC[2],C::handAlpha);
-            if(C::handM==1){
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-                glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
-                glLineWidth(C::handLineWidth);
-            }
-            int r=oSDM(f);glPopAttrib();
-            if(pushed)glPopMatrix();
-            return r;
-        }
+
+    if(!isViewModel || !C::hand){
+        const int r=oSDM(f);
+        if(pushed)glPopMatrix();
+        return r;
     }
-    int r=oSDM(f);
+
+    // Fixed-function lighting can override glColor. Disable it for the tint;
+    // GL_ALL_ATTRIB_BITS restores the game's state after these local passes.
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+    glDepthMask(GL_FALSE);
+
+    const float alpha=std::max(0.f,std::min(1.f,C::handAlpha));
+    const float pulse=(C::handM==3)
+        ? (.72f + .28f*(.5f + .5f*sinf((float)GetTickCount()*.0032f)))
+        : 1.f;
+    int result=0;
+
+    if(C::handM==0){
+        // Clean matte / flat material.
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha);
+        result=oSDM(f);
+    }else if(C::handM==1){
+        // Crisp wireframe.
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+        glLineWidth(C::handLineWidth);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha);
+        result=oSDM(f);
+    }else{
+        // Glass and Pulse: translucent body + broad additive edges +
+        // a narrow, brighter wire pass. Pulse animates only the local accent.
+        glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*(C::handM==2?.20f:.15f));
+        result=oSDM(f);
+
+        glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE);
+        glLineWidth(std::min(5.f,C::handLineWidth*2.4f));
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*.28f*pulse);
+        result=oSDM(f);
+
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glLineWidth(C::handLineWidth);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*.92f*pulse);
+        result=oSDM(f);
+    }
+
+    glPopAttrib();
     if(pushed)glPopMatrix();
-    return r;
+    return result;
 }
 
 // ============================================================================
