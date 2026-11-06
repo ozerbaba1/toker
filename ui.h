@@ -70,69 +70,129 @@ inline unsigned g_backdrop_tex = 0;
 inline float g_last_rect[4] = { 0.f, 0.f, 0.f, 0.f };
 inline bool g_glass_live = false;
 
-inline void capture_backdrop() {
-    // Keep the last valid glass frame between refreshes. glReadPixels is a
-    // synchronous GPU/CPU readback, so refreshing every frame causes stalls.
-    static unsigned refresh_tick = 0;
-    if (!C::glass) { g_glass_live = false; return; }
-    if (g_glass_live && (++refresh_tick % 4u) != 0u) return;
-    g_glass_live = false;
-    if (g_last_rect[2] < 64.f || g_last_rect[3] < 64.f) return;
+inline int g_backdrop_tex_w = 0;
+inline int g_backdrop_tex_h = 0;
+inline DWORD g_backdrop_last_capture = 0;
 
-    ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int sw = (int)ds.x, sh = (int)ds.y;
+inline void capture_backdrop() {
+    // A glass snapshot is intentionally refreshed at a bounded cadence.
+    // Readback is synchronous on legacy OpenGL, so doing it every frame can
+    // stall the game thread even when the texture itself is tiny.
+    if (!C::glass) { g_glass_live = false; return; }
+
+    const int quality = (C::glassQuality < 0 || C::glassQuality > 2) ? 1 : C::glassQuality;
+    const DWORD interval = quality == 0 ? 110u : (quality == 2 ? 34u : 66u);
+    const DWORD now = GetTickCount();
+    if (g_backdrop_last_capture && (DWORD)(now - g_backdrop_last_capture) < interval)
+        return;
+    g_backdrop_last_capture = now;
+    g_glass_live = false;
+
+    if (g_last_rect[2] < 64.f || g_last_rect[3] < 64.f) return;
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const int sw = (int)ds.x, sh = (int)ds.y;
     if (sw <= 0 || sh <= 0) return;
 
     int x = (int)g_last_rect[0], y = (int)g_last_rect[1];
     int w = (int)g_last_rect[2], h = (int)g_last_rect[3];
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
+    if (x >= sw || y >= sh) return;
     if (x + w > sw) w = sw - x;
     if (y + h > sh) h = sh - y;
     if (w < 64 || h < 64) return;
 
-    int gy = sh - y - h;   // GL reads from the bottom-left corner
-    if (gy < 0) { h += gy; gy = 0; }
-    if (h < 64) return;
+    const int gy = sh - y - h;
+    if (gy < 0 || gy + h > sh) return;
 
-    static std::vector<unsigned char> raw, small;
-    const int step = 5;
-    int dw = w / step, dh = h / step;
+    static std::vector<unsigned char> raw, small, softened;
+    const int step = quality == 0 ? 7 : (quality == 2 ? 4 : 5);
+    const int dw = w / step, dh = h / step;
     if (dw < 8 || dh < 8) return;
 
-    raw.resize((size_t)w * h * 3);
+    // Preserve the host game's pixel-store and texture-binding state.
+    GLint oldPack = 4, oldUnpack = 4, oldTexture = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &oldPack);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &oldUnpack);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
+
+    raw.resize((size_t)w * (size_t)h * 3u);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(x, gy, w, h, GL_RGB, GL_UNSIGNED_BYTE, raw.data());
+    glPixelStorei(GL_PACK_ALIGNMENT, oldPack);
 
-    small.resize((size_t)dw * dh * 3);
+    small.resize((size_t)dw * (size_t)dh * 3u);
     const unsigned int div = (unsigned int)(step * step * 256);
-    for (int j = 0; j < dh; j++) {
-        for (int i = 0; i < dw; i++) {
+    for (int j = 0; j < dh; ++j) {
+        for (int i = 0; i < dw; ++i) {
             unsigned int acc = 0;
-            for (int yy = 0; yy < step; yy++) {
-                const unsigned char* row = raw.data() + ((size_t)(j * step + yy) * w + i * step) * 3;
-                for (int xx = 0; xx < step; xx++)
-                    acc += (unsigned)row[xx * 3] * 77u + (unsigned)row[xx * 3 + 1] * 151u +
-                           (unsigned)row[xx * 3 + 2] * 28u;
+            for (int yy = 0; yy < step; ++yy) {
+                const unsigned char* row = raw.data() +
+                    ((size_t)(j * step + yy) * (size_t)w + (size_t)(i * step)) * 3u;
+                for (int xx = 0; xx < step; ++xx) {
+                    const unsigned char* px = row + (size_t)xx * 3u;
+                    acc += (unsigned)px[0] * 77u + (unsigned)px[1] * 151u +
+                           (unsigned)px[2] * 28u;
+                }
             }
             int l = (int)(acc / div);
-            l = (int)(l * .78f) + 4;          // dim a touch, lift the blacks
+            l = (int)(l * .76f) + 5;
             if (l > 255) l = 255;
-            size_t o = ((size_t)j * dw + i) * 3;
-            small[o + 0] = (unsigned char)l;
+            const size_t o = ((size_t)j * (size_t)dw + (size_t)i) * 3u;
+            small[o] = (unsigned char)l;
             small[o + 1] = (unsigned char)std::min(255, l + 2);
             small[o + 2] = (unsigned char)std::min(255, l + 4);
         }
     }
 
+    // Small separable-style 3x3 Gaussian pass. It softens block boundaries
+    // without requiring a shader or another full-resolution framebuffer.
+    softened.resize(small.size());
+    for (int j = 0; j < dh; ++j) {
+        for (int i = 0; i < dw; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                unsigned int sum = 0;
+                for (int yy = -1; yy <= 1; ++yy) {
+                    const int sy = std::max(0, std::min(dh - 1, j + yy));
+                    const unsigned int wy = (yy == 0) ? 2u : 1u;
+                    for (int xx = -1; xx <= 1; ++xx) {
+                        const int sx = std::max(0, std::min(dw - 1, i + xx));
+                        const unsigned int wx = (xx == 0) ? 2u : 1u;
+                        const size_t at = ((size_t)sy * (size_t)dw + (size_t)sx) * 3u + (size_t)c;
+                        sum += (unsigned int)small[at] * wx * wy;
+                    }
+                }
+                const size_t out = ((size_t)j * (size_t)dw + (size_t)i) * 3u + (size_t)c;
+                softened[out] = (unsigned char)((sum + 8u) / 16u);
+            }
+        }
+    }
+
     if (!g_backdrop_tex) glGenTextures(1, &g_backdrop_tex);
-    if (!g_backdrop_tex) return;
+    if (!g_backdrop_tex) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)oldTexture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpack);
+        return;
+    }
+
     glBindTexture(GL_TEXTURE_2D, g_backdrop_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, dw, dh, 0, GL_RGB, GL_UNSIGNED_BYTE, small.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (g_backdrop_tex_w != dw || g_backdrop_tex_h != dh) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, dw, dh, 0, GL_RGB,
+                     GL_UNSIGNED_BYTE, softened.data());
+        g_backdrop_tex_w = dw;
+        g_backdrop_tex_h = dh;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, dw, dh, GL_RGB,
+                        GL_UNSIGNED_BYTE, softened.data());
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindTexture(GL_TEXTURE_2D, (GLuint)oldTexture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpack);
     g_glass_live = true;
 }
 
@@ -153,9 +213,10 @@ inline void glass_shell(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float r) {
     if (g_glass_live && g_backdrop_tex) {
         dl->AddImageRounded(glass_tex(), p0, p1, ImVec2(0.f, 1.f), ImVec2(1.f, 0.f),
                             IM_COL32(255, 255, 255, 255), r);
-        dl->AddRectFilled(p0, p1, SHELL, r);
+        dl->AddRectFilled(p0, p1, scale_a(SHELL, clamp01(C::glassOpacity)), r);
     } else {
-        dl->AddRectFilled(p0, p1, IM_COL32(12, 13, 17, 246), r);
+        const int coat = (int)(224.f * clamp01(C::glassOpacity));
+        dl->AddRectFilled(p0, p1, IM_COL32(12, 13, 17, coat), r);
     }
     dl->AddRectFilledMultiColor(ImVec2(p0.x + r, p0.y + 1.f), ImVec2(p1.x - r, p0.y + 150.f),
                                 IM_COL32(255, 255, 255, 13), IM_COL32(255, 255, 255, 10),
@@ -837,6 +898,7 @@ struct State {
 // ---------------------------------------------------------------------------
 // pages
 // ---------------------------------------------------------------------------
+inline const char* k_glass_quality[] = { "Performance", "Balanced", "Smooth" };
 inline const char* k_esp_styles[] = { "Box", "Corner" };
 inline const char* k_chams[] = { "Off", "Flat", "Wire", "Glow", "Rainbow" };
 inline const char* k_hand[] = { "Flat", "Wire" };
@@ -1003,7 +1065,11 @@ inline void page_misc(ImVec2 o, float full, State& st) {
     Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Interface", "overlay options", nullptr);
     check_row(b, "Watermark", &C::watermark);
     check_row(b, "Frosted glass", &C::glass, "blur the scene behind the menu");
-    check_row(b, "Reduce motion", &C::reduceMotion, "snappier transitions");
+    if (C::glass) {
+        slider_row(b, "Glass opacity", &C::glassOpacity, .45f, 1.f, "%.2f");
+        combo_row(b, "Backdrop quality", &C::glassQuality, k_glass_quality, 3);
+    }
+    check_row(b, "Reduce motion", &C::reduceMotion, "shorter transitions");
     keybind_row(b, "Menu key", &C::menuKey);
     float bb = card_end(b);
 
@@ -1279,12 +1345,31 @@ inline void draw(State& st, bool* open) {
     ImVec2 o = ImGui::GetCursorScreenPos();
     float full = ImGui::GetContentRegionAvail().x;
 
+    // A quiet veil reveals each page with a short, non-blocking fade.
+    static int previous_page = -1;
+    static float page_reveal = 1.f;
+    if (previous_page != page) {
+        previous_page = page;
+        page_reveal = 0.f;
+    }
+    const float page_dt = std::min(.1f, io.DeltaTime);
+    page_reveal += (1.f - page_reveal) * std::min(1.f, page_dt * (C::reduceMotion ? 24.f : 10.f));
+    o.x += (1.f - page_reveal) * (C::reduceMotion ? 2.f : 7.f);
+
     switch (page) {
     case 0: page_visuals(o, full); break;
     case 1: page_aim(o, full, st); break;
     case 2: page_world(o, full); break;
     case 3: page_misc(o, full, st); break;
     default: page_config(o, full, st, &save_click, &load_click, &reset_click); break;
+    }
+
+    if (page_reveal < .995f) {
+        ImDrawList* page_dl = ImGui::GetWindowDrawList();
+        const ImVec2 child_min = ImGui::GetWindowPos();
+        const ImVec2 child_max = child_min + ImGui::GetWindowSize();
+        page_dl->AddRectFilled(child_min, child_max,
+            IM_COL32(10, 11, 14, (int)(170.f * (1.f - page_reveal))), 10.f);
     }
 
     ImGui::SetCursorScreenPos(ImGui::GetCursorScreenPos());
