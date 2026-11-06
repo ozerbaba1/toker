@@ -249,8 +249,17 @@ static int __cdecl hkSDM(int f){
         if(dr[1]<0.5f){
             glPushAttrib(GL_ALL_ATTRIB_BITS);
             glDisable(GL_TEXTURE_2D);
-            glColor4f(C::handC[0],C::handC[1],C::handC[2],1);
-            if(C::handM==2){glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);glLineWidth(1.5f);}
+            if(C::handAlpha < .999f){
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+            }
+            glColor4f(C::handC[0],C::handC[1],C::handC[2],C::handAlpha);
+            if(C::handM==2){
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+                glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+                glLineWidth(C::handLineWidth);
+            }
             int r=oSDM(f);glPopAttrib();
             if(pushed)glPopMatrix();
             return r;
@@ -442,14 +451,26 @@ static void DrawESP(){
         }
     }
 
-    // custom crosshair
+    // custom crosshair — optional dark outline keeps the reticle readable
+    // without changing aim or target selection.
     if(C::xhair){
-        ImU32 xc=IM_COL32((int)(C::xhCol[0]*255),(int)(C::xhCol[1]*255),(int)(C::xhCol[2]*255),(int)(C::xhCol[3]*255));
-        float g=C::xhGap,s=C::xhSize,t=C::xhThick;
-        dl->AddLine(ImVec2(cx-g-s,cy),ImVec2(cx-g,cy),xc,t);
-        dl->AddLine(ImVec2(cx+g,cy),ImVec2(cx+g+s,cy),xc,t);
-        dl->AddLine(ImVec2(cx,cy-g-s),ImVec2(cx,cy-g),xc,t);
-        dl->AddLine(ImVec2(cx,cy+g),ImVec2(cx,cy+g+s),xc,t);
+        const float alpha=std::max(0.f,std::min(1.f,C::xhCol[3]));
+        ImU32 xc=IM_COL32((int)(C::xhCol[0]*255),(int)(C::xhCol[1]*255),
+                          (int)(C::xhCol[2]*255),(int)(alpha*255));
+        ImU32 oc=IM_COL32(5,6,8,(int)(alpha*210));
+        const float g=C::xhGap, len=C::xhSize, thick=C::xhThick;
+        auto stroke=[&](ImVec2 a,ImVec2 b){
+            if(C::xhOutline) dl->AddLine(a,b,oc,thick+2.2f);
+            dl->AddLine(a,b,xc,thick);
+        };
+        stroke(ImVec2(cx-g-len,cy),ImVec2(cx-g,cy));
+        stroke(ImVec2(cx+g,cy),ImVec2(cx+g+len,cy));
+        stroke(ImVec2(cx,cy-g-len),ImVec2(cx,cy-g));
+        stroke(ImVec2(cx,cy+g),ImVec2(cx,cy+g+len));
+        if(C::xhDot){
+            if(C::xhOutline) dl->AddCircleFilled(ImVec2(cx,cy),3.2f,oc,16);
+            dl->AddCircleFilled(ImVec2(cx,cy),std::max(1.2f,thick*.72f),xc,16);
+        }
     }
 
     // scope overlay: clean + with fading arms
@@ -562,9 +583,16 @@ static BOOL APIENTRY hkSB(HDC hdc){
     ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
     glPopMatrix();glPopAttrib();glPopAttrib();
     BOOL r=oSB(hdc);
-    if(C::fogOn){glEnable(GL_FOG);glFogi(GL_FOG_MODE,GL_LINEAR);
-        glFogf(GL_FOG_START,C::fogS);glFogf(GL_FOG_END,C::fogE);
-        float fc[4]={C::fogC[0],C::fogC[1],C::fogC[2],1};glFogfv(GL_FOG_COLOR,fc);}
+    if(C::fogOn){
+        glEnable(GL_FOG);
+        const GLenum fogMode = C::fogMode==1 ? GL_EXP : (C::fogMode==2 ? GL_EXP2 : GL_LINEAR);
+        glFogi(GL_FOG_MODE,(GLint)fogMode);
+        glFogf(GL_FOG_DENSITY,C::fogDensity);
+        glFogf(GL_FOG_START,C::fogS);
+        glFogf(GL_FOG_END,C::fogE);
+        float fc[4]={C::fogC[0],C::fogC[1],C::fogC[2],1};
+        glFogfv(GL_FOG_COLOR,fc);
+    }
     else glDisable(GL_FOG);
     return r;}
 
