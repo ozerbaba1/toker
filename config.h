@@ -18,9 +18,7 @@ namespace C {
     bool espBox = true;
     bool espName = true, espDist = true, espSnap = false;
     bool espTrail = false, espGlow = true, espIgnoreTeam = false;
-    bool espFill = false, espOutline = true;
-    float espAlpha = 1.f, espMaxDist = 0.f;
-    float espFillAlpha = .12f, espLineWidth = 1.5f, espGlowStrength = .65f;            // alpha 0..1, max meters (0 = unlimited)
+    float espAlpha = 1.f, espMaxDist = 0.f;            // alpha 0..1, max meters (0 = unlimited)
     float ecT[3] = { 1.f, .4f, 0.f }, ecCT[3] = { 0.f, .47f, 1.f };
 
     // radar
@@ -29,9 +27,6 @@ namespace C {
 
     // chams: 0 = off, 1 = flat, 2 = wire, 3 = glow, 4 = rainbow
     int chMode = 1; float chamsAlpha = 1.f;
-    bool chWallPass = true, chVisiblePass = true;
-    float chWallAlpha = .55f, chVisibleAlpha = 1.f;
-    float chWireWidth = 1.5f, chGlowWidth = 3.f;
     float chTV[3] = { 1.f, .55f, 0.f }, chTW[3] = { 1.f, .2f, 0.f };
     float chCV[3] = { 0.f, .55f, 1.f }, chCW[3] = { 0.f, .2f, 1.f };
 
@@ -94,8 +89,6 @@ namespace cfg {
             { "esp",         T_BOOL, &C::esp },
             { "espStyle",    T_INT,  &C::espStyle },
             { "espBox",      T_BOOL, &C::espBox },
-            { "espFill",     T_BOOL, &C::espFill },
-            { "espOutline",  T_BOOL, &C::espOutline },
             { "espName",     T_BOOL, &C::espName },
             { "espDist",     T_BOOL, &C::espDist },
             { "espSnap",     T_BOOL, &C::espSnap },
@@ -104,9 +97,6 @@ namespace cfg {
             { "espIgnoreTeam",T_BOOL,&C::espIgnoreTeam },
             { "espAlpha",    T_F3,   &C::espAlpha },
             { "espMaxDist",  T_F3,   &C::espMaxDist },
-            { "espFillAlpha",T_F3,   &C::espFillAlpha },
-            { "espLineWidth",T_F3,   &C::espLineWidth },
-            { "espGlowStrength",T_F3,&C::espGlowStrength },
             { "ecT",         T_F3,   C::ecT },
             { "ecCT",        T_F3,   C::ecCT },
             { "radar",       T_BOOL, &C::radar },
@@ -115,12 +105,6 @@ namespace cfg {
             { "radarSize",   T_F3,   &C::radarSize },
             { "chMode",      T_INT,  &C::chMode },
             { "chamsAlpha",  T_F3,   &C::chamsAlpha },
-            { "chWallPass",  T_BOOL, &C::chWallPass },
-            { "chVisiblePass",T_BOOL,&C::chVisiblePass },
-            { "chWallAlpha", T_F3,   &C::chWallAlpha },
-            { "chVisibleAlpha",T_F3, &C::chVisibleAlpha },
-            { "chWireWidth", T_F3,   &C::chWireWidth },
-            { "chGlowWidth", T_F3,   &C::chGlowWidth },
             { "chTV",        T_F3,   C::chTV },
             { "chTW",        T_F3,   C::chTW },
             { "chCV",        T_F3,   C::chCV },
@@ -176,10 +160,6 @@ namespace cfg {
                !strcmp(key, "trigFov") || !strcmp(key, "rcsF") ||
                !strcmp(key, "espAlpha") || !strcmp(key, "espMaxDist") ||
                !strcmp(key, "chamsAlpha") || !strcmp(key, "radarRange") ||
-               !strcmp(key, "espFillAlpha") || !strcmp(key, "espLineWidth") ||
-               !strcmp(key, "espGlowStrength") || !strcmp(key, "chWallAlpha") ||
-               !strcmp(key, "chVisibleAlpha") || !strcmp(key, "chWireWidth") ||
-               !strcmp(key, "chGlowWidth") ||
                !strcmp(key, "radarSize");
     }
 
@@ -251,17 +231,12 @@ namespace cfg {
         C::espBox = true;
         C::espName = true; C::espDist = true; C::espSnap = false;
         C::espTrail = false; C::espGlow = true; C::espIgnoreTeam = false;
-        C::espFill = false; C::espOutline = true;
         C::espAlpha = 1.f; C::espMaxDist = 0.f;
-        C::espFillAlpha = .12f; C::espLineWidth = 1.5f; C::espGlowStrength = .65f;
         C::ecT[0] = 1.f; C::ecT[1] = .4f; C::ecT[2] = 0.f;
         C::ecCT[0] = 0.f; C::ecCT[1] = .47f; C::ecCT[2] = 1.f;
         C::radar = false; C::radarEnemies = true;
         C::radarRange = 1500.f; C::radarSize = 140.f;
         C::chMode = 1; C::chamsAlpha = 1.f;
-        C::chWallPass = true; C::chVisiblePass = true;
-        C::chWallAlpha = .55f; C::chVisibleAlpha = 1.f;
-        C::chWireWidth = 1.5f; C::chGlowWidth = 3.f;
         C::chTV[0] = 1.f; C::chTV[1] = .55f; C::chTV[2] = 0.f;
         C::chTW[0] = 1.f; C::chTW[1] = .2f; C::chTW[2] = 0.f;
         C::chCV[0] = 0.f; C::chCV[1] = .55f; C::chCV[2] = 1.f;
