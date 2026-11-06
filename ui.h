@@ -934,8 +934,9 @@ inline void fps_graph(ImDrawList* dl, ImVec2 p, float w, float h, ImU32 col) {
 
 inline void page_visuals(ImVec2 o, float full) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
-    const float xl = o.x, xr = o.x + colw + gap;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float xl = o.x, xr = stacked ? o.x : o.x + colw + gap;
     float yl = o.y, yr = o.y;
 
     Card a = card_begin(ImVec2(xl, yl), colw, "ESP", "player boxes & info", &C::esp);
@@ -952,6 +953,7 @@ inline void page_visuals(ImVec2 o, float full) {
     section_label(a, "TEAM COLORS");
     color_pair(a, "Terrorist", C::ecT, "Counter", C::ecCT);
     yl = card_end(a) + gap;
+    if (stacked) yr = yl;
 
     bool ch_on = C::chMode > 0;
     Card b = card_begin(ImVec2(xr, yr), colw, "Chams", "player shading", &ch_on);
@@ -962,6 +964,7 @@ inline void page_visuals(ImVec2 o, float full) {
     color_pair(b, "T visible", C::chTV, "T wall", C::chTW);
     color_pair(b, "CT visible", C::chCV, "CT wall", C::chCW);
     yr = card_end(b) + gap;
+    if (stacked) yl = yr;
 
     Card c = card_begin(ImVec2(xl, yl), colw, "ViewModel", "hands & offset", &C::hand);
     combo_row(c, "Material", &C::handM, k_hand, 4);
@@ -976,6 +979,7 @@ inline void page_visuals(ImVec2 o, float full) {
     }
     drag3_row(c, "XYZ offset", C::vmOfs, -5.f, 5.f, .05f);
     yl = card_end(c) + gap;
+    if (stacked) yr = yl;
 
     Card d = card_begin(ImVec2(xr, yr), colw, "Crosshair", "reticle appearance", &C::xhair);
     slider_row(d, "Length", &C::xhSize, 1.f, 20.f, "%.1f");
@@ -1023,7 +1027,9 @@ inline void page_visuals(ImVec2 o, float full) {
 
 inline void page_aim(ImVec2 o, float full, State& st) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Aimbot", "target selection", &C::aim);
@@ -1035,14 +1041,16 @@ inline void page_aim(ImVec2 o, float full, State& st) {
     check_row(a, "Visibility check", &C::aimVis);
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Triggerbot", "auto fire", &C::trig);
+    const float secondY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, secondY), colw, "Triggerbot", "auto fire", &C::trig);
     slider_row(b, "FOV", &C::trigFov, .5f, 10.f, "%.1f", "\xC2\xB0");
     slider_row_i(b, "Delay", &C::trigDelay, 0, 200);
     combo_row(b, "Part", &C::trigPart, k_part, 3);
     float bb1 = card_end(b);
 
     float y2 = bb1 + gap;
-    Card d = card_begin(ImVec2(o.x + colw + gap, y2), colw, "Recoil", "punch compensation", &C::rcs);
+    const float thirdY = stacked ? bb1 + gap : y2;
+    Card d = card_begin(ImVec2(secondX, thirdY), colw, "Recoil", "punch compensation", &C::rcs);
     slider_row(d, "Factor", &C::rcsF, 0.f, 3.f, "%.2f");
     d.dl->AddText(f_mono, 10.f, ImVec2(d.x(), d.py() + 1.f), scale_a(DIM2, d.dim()), "source  pm->punchangle");
     d.y += 16.f;
@@ -1060,7 +1068,9 @@ inline void page_aim(ImVec2 o, float full, State& st) {
 
 inline void page_world(ImVec2 o, float full) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Environment", "fog & lighting", nullptr);
@@ -1079,7 +1089,8 @@ inline void page_world(ImVec2 o, float full) {
     check_row(a, "No flash", &C::noFlash);
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Effects", "tracers & overlays", nullptr);
+    const float effectsY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, effectsY), colw, "Effects", "tracers & overlays", nullptr);
     check_row(b, "Bullet tracers", &C::btrace);
     color_row(b, "Tracer color", C::btCol);
     section_label(b, "TRAIL");
@@ -1089,7 +1100,8 @@ inline void page_world(ImVec2 o, float full) {
     check_row(b, "No damage flash", &C::dmgFlash);
     float bb = card_end(b);
 
-    Card r = card_begin(ImVec2(o.x + colw + gap, bb + gap), colw, "Radar", "2d player radar", &C::radar);
+    const float radarY = bb + gap;
+    Card r = card_begin(ImVec2(secondX, radarY), colw, "Radar", "2d player radar", &C::radar);
     check_row(r, "Enemies only", &C::radarEnemies, "hide teammates on the radar");
     slider_row(r, "Range", &C::radarRange, 400.f, 4000.f, "%.0f");
     slider_row(r, "Size", &C::radarSize, 90.f, 220.f, "%.0f", " px");
@@ -1101,7 +1113,9 @@ inline void page_world(ImVec2 o, float full) {
 
 inline void page_misc(ImVec2 o, float full, State& st) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Movement", "input helpers", nullptr);
@@ -1110,7 +1124,8 @@ inline void page_misc(ImVec2 o, float full, State& st) {
     check_row(a, "Auto pistol", &C::autoPistol, "pulse semi-auto fire");
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Interface", "overlay options", nullptr);
+    const float interfaceY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, interfaceY), colw, "Interface", "overlay options", nullptr);
     check_row(b, "Watermark", &C::watermark);
     check_row(b, "Frosted glass", &C::glass, "blur the scene behind the menu");
     if (C::glass) {
