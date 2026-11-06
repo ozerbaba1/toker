@@ -969,10 +969,11 @@ inline void page_visuals(ImVec2 o, float full) {
     slider_row(c, "Opacity", &C::handAlpha, .05f, 1.f, "%.2f");
     if (C::handM != 0)
         slider_row(c, "Edge width", &C::handLineWidth, .5f, 5.f, "%.1f");
-    if (C::handM >= 2)
+    if (C::handM >= 2) {
         c.dl->AddText(f_small, 10.f, ImVec2(c.x(), c.py()+2.f), DIM2,
-                      C::handM==3 ? "soft pulse / dual-pass glass" : "translucent fill / luminous edges"),
+                      C::handM==3 ? "soft pulse / dual-pass glass" : "translucent fill / luminous edges");
         c.y += 17.f;
+    }
     drag3_row(c, "XYZ offset", C::vmOfs, -5.f, 5.f, .05f);
     yl = card_end(c) + gap;
 
