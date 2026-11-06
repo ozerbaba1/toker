@@ -902,7 +902,7 @@ inline const char* k_glass_quality[] = { "Performance", "Balanced", "Smooth" };
 inline const char* k_fog_modes[] = { "Linear", "Exponential", "Exponential squared" };
 inline const char* k_esp_styles[] = { "Box", "Corner" };
 inline const char* k_chams[] = { "Off", "Flat", "Wire", "Glow", "Rainbow" };
-inline const char* k_hand[] = { "Flat", "Wire" };
+inline const char* k_hand[] = { "Flat", "Wire", "Glass", "Pulse" };
 inline const char* k_bone[] = { "Head", "Body" };
 inline const char* k_part[] = { "Any", "Head", "Body" };
 
@@ -964,11 +964,15 @@ inline void page_visuals(ImVec2 o, float full) {
     yr = card_end(b) + gap;
 
     Card c = card_begin(ImVec2(xl, yl), colw, "ViewModel", "hands & offset", &C::hand);
-    combo_row(c, "Style", &C::handM, k_hand, 2);
-    color_row(c, "Hand color", C::handC);
+    combo_row(c, "Material", &C::handM, k_hand, 4);
+    color_row(c, "Tint", C::handC);
     slider_row(c, "Opacity", &C::handAlpha, .05f, 1.f, "%.2f");
-    if (C::handM == 1)
-        slider_row(c, "Wire width", &C::handLineWidth, .5f, 5.f, "%.1f");
+    if (C::handM != 0)
+        slider_row(c, "Edge width", &C::handLineWidth, .5f, 5.f, "%.1f");
+    if (C::handM >= 2)
+        c.dl->AddText(f_small, 10.f, ImVec2(c.x(), c.py()+2.f), DIM2,
+                      C::handM==3 ? "soft pulse / dual-pass glass" : "translucent fill / luminous edges"),
+        c.y += 17.f;
     drag3_row(c, "XYZ offset", C::vmOfs, -5.f, 5.f, .05f);
     yl = card_end(c) + gap;
 
