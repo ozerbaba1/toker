@@ -1173,7 +1173,9 @@ inline void page_misc(ImVec2 o, float full, State& st) {
 
 inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool* load_click, bool* reset_click) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Persistence", "toker_cs16.cfg", nullptr);
@@ -1187,7 +1189,8 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
     a.y += 16.f;
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "About", "toker cs 1.6", nullptr);
+    const float aboutY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, aboutY), colw, "About", "toker cs 1.6", nullptr);
     kv_row(b, "build", st.build ? st.build : "2.0");
     kv_row(b, "target", "GoldSrc / protocol 48");
     kv_row(b, "engine", st.eng ? "attached" : "waiting");
@@ -1202,24 +1205,46 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
 
     Card t = card_begin(ImVec2(o.x, y), full, "Tools", "quick actions", nullptr);
     {
-        float bw = 170.f, sp = 10.f;
-        float total = bw * 3.f + sp * 2.f;
-        float sx = t.x() + (t.cw() - total) * .5f;
-        float by = t.py();
-        if (button_at(t, "Open config folder", ImVec2(sx, by), bw)) {
-            char cmd[MAX_PATH + 32], d[MAX_PATH];
-            cfg::dir(d, MAX_PATH);
-            snprintf(cmd, sizeof(cmd), "explorer.exe \"%s\"", d);
-            WinExec(cmd, SW_SHOWNORMAL);
+        const float sp = 8.f;
+        const float by = t.py();
+        if (t.cw() >= 530.f) {
+            const float bw = 170.f;
+            const float total = bw * 3.f + sp * 2.f;
+            const float sx = t.x() + (t.cw() - total) * .5f;
+            if (button_at(t, "Open config folder", ImVec2(sx, by), bw)) {
+                char cmd[MAX_PATH + 32], d[MAX_PATH];
+                cfg::dir(d, MAX_PATH);
+                snprintf(cmd, sizeof(cmd), "explorer.exe \\"%s\\"", d);
+                WinExec(cmd, SW_SHOWNORMAL);
+            }
+            if (button_at(t, "Copy diagnostics", ImVec2(sx + bw + sp, by), bw)) {
+                char dg[256];
+                snprintf(dg, sizeof(dg), "toker build %s | eng 0x%X pm 0x%X si 0x%X | %d players | %.0f fps",
+                         st.build ? st.build : "?", st.eng_addr, st.pm_addr, st.si_addr, st.players, st.fps);
+                copy_clip(dg);
+            }
+            if (button_at(t, "Reload config", ImVec2(sx + (bw + sp) * 2.f, by), bw)) cfg::load();
+            t.y += 38.f;
+        } else {
+            const float bw = std::min(220.f, t.cw());
+            const float sx = t.x() + (t.cw() - bw) * .5f;
+            if (button_at(t, "Open config folder", ImVec2(sx, t.y), bw)) {
+                char cmd[MAX_PATH + 32], d[MAX_PATH];
+                cfg::dir(d, MAX_PATH);
+                snprintf(cmd, sizeof(cmd), "explorer.exe \\"%s\\"", d);
+                WinExec(cmd, SW_SHOWNORMAL);
+            }
+            t.y += 36.f;
+            if (button_at(t, "Copy diagnostics", ImVec2(sx, t.y), bw)) {
+                char dg[256];
+                snprintf(dg, sizeof(dg), "toker build %s | eng 0x%X pm 0x%X si 0x%X | %d players | %.0f fps",
+                         st.build ? st.build : "?", st.eng_addr, st.pm_addr, st.si_addr, st.players, st.fps);
+                copy_clip(dg);
+            }
+            t.y += 36.f;
+            if (button_at(t, "Reload config", ImVec2(sx, t.y), bw)) cfg::load();
+            t.y += 36.f;
         }
-        if (button_at(t, "Copy diagnostics", ImVec2(sx + bw + sp, by), bw)) {
-            char dg[256];
-            snprintf(dg, sizeof(dg), "toker build %s | eng 0x%X pm 0x%X si 0x%X | %d players | %.0f fps",
-                     st.build ? st.build : "?", st.eng_addr, st.pm_addr, st.si_addr, st.players, st.fps);
-            copy_clip(dg);
-        }
-        if (button_at(t, "Reload config", ImVec2(sx + (bw + sp) * 2.f, by), bw)) cfg::load();
-        t.y += 38.f;
     }
     float bt = card_end(t);
 
