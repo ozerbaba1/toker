@@ -34,15 +34,18 @@ namespace C {
 
     // viewmodel
     bool hand = false; int handM = 1; float handC[3] = { 0.f, .9f, .4f };
+    float handAlpha = 1.f, handLineWidth = 1.5f;
     float vmOfs[3] = { 0.f, 0.f, 0.f };
 
     // crosshair
     bool xhair = false; float xhSize = 6.f, xhGap = 2.f, xhThick = 1.5f;
     float xhCol[4] = { 0.f, 1.f, .4f, 1.f };
+    bool xhDot = false, xhOutline = true;
     bool scopeOvr = false;
 
     // world
     bool fogOn = false; float fogC[3] = { .05f, .05f, .12f };
+    int fogMode = 0; float fogDensity = .025f;
     float fogS = 200.f, fogE = 2500.f;
     bool nightMode = false; float nightAlpha = .4f;
     bool noFlash = false;
@@ -116,15 +119,21 @@ namespace cfg {
             { "hand",        T_BOOL, &C::hand },
             { "handM",       T_INT,  &C::handM },
             { "handC",       T_F3,   C::handC },
+            { "handAlpha",   T_F3,   &C::handAlpha },
+            { "handLineWidth",T_F3,  &C::handLineWidth },
             { "vmOfs",       T_F3,   C::vmOfs },
             { "xhair",       T_BOOL, &C::xhair },
             { "xhSize",      T_F3,   &C::xhSize },   // scalar stored as f3[0]
             { "xhGap",       T_F3,   &C::xhGap },
             { "xhThick",     T_F3,   &C::xhThick },
             { "xhCol",       T_F4,   C::xhCol },
+            { "xhDot",       T_BOOL, &C::xhDot },
+            { "xhOutline",   T_BOOL, &C::xhOutline },
             { "scopeOvr",    T_BOOL, &C::scopeOvr },
             { "fogOn",       T_BOOL, &C::fogOn },
             { "fogC",        T_F3,   C::fogC },
+            { "fogMode",     T_INT,  &C::fogMode },
+            { "fogDensity",  T_F3,   &C::fogDensity },
             { "fogS",        T_F3,   &C::fogS },
             { "fogE",        T_F3,   &C::fogE },
             { "nightMode",   T_BOOL, &C::nightMode },
@@ -158,7 +167,9 @@ namespace cfg {
     // F3 entries whose pointer is a lone float (scalar-in-vec hack) need special handling.
     inline bool scalar_f3(const char* key) {
         return !strcmp(key, "xhSize") || !strcmp(key, "xhGap") ||
-               !strcmp(key, "glassOpacity") || !strcmp(key, "xhThick") || !strcmp(key, "fogS") ||
+               !strcmp(key, "glassOpacity") || !strcmp(key, "handAlpha") ||
+               !strcmp(key, "handLineWidth") || !strcmp(key, "fogDensity") ||
+               !strcmp(key, "xhThick") || !strcmp(key, "fogS") ||
                !strcmp(key, "fogE") || !strcmp(key, "nightAlpha") ||
                !strcmp(key, "aimFov") || !strcmp(key, "aimSmooth") ||
                !strcmp(key, "trigFov") || !strcmp(key, "rcsF") ||
@@ -228,6 +239,13 @@ namespace cfg {
         if (C::glassQuality < 0 || C::glassQuality > 2) C::glassQuality = 1;
         if (C::glassOpacity < .45f) C::glassOpacity = .45f;
         if (C::glassOpacity > 1.f) C::glassOpacity = 1.f;
+        if (C::fogMode < 0 || C::fogMode > 2) C::fogMode = 0;
+        if (C::fogDensity < .001f) C::fogDensity = .001f;
+        if (C::fogDensity > .15f) C::fogDensity = .15f;
+        if (C::handAlpha < .05f) C::handAlpha = .05f;
+        if (C::handAlpha > 1.f) C::handAlpha = 1.f;
+        if (C::handLineWidth < .5f) C::handLineWidth = .5f;
+        if (C::handLineWidth > 5.f) C::handLineWidth = 5.f;
         return true;
     }
 
@@ -250,11 +268,14 @@ namespace cfg {
         C::chCV[0] = 0.f; C::chCV[1] = .55f; C::chCV[2] = 1.f;
         C::chCW[0] = 0.f; C::chCW[1] = .2f; C::chCW[2] = 1.f;
         C::hand = false; C::handM = 1; C::handC[0] = 0.f; C::handC[1] = .9f; C::handC[2] = .4f;
+        C::handAlpha = 1.f; C::handLineWidth = 1.5f;
         C::vmOfs[0] = C::vmOfs[1] = C::vmOfs[2] = 0.f;
         C::xhair = false; C::xhSize = 6.f; C::xhGap = 2.f; C::xhThick = 1.5f;
         C::xhCol[0] = 0.f; C::xhCol[1] = 1.f; C::xhCol[2] = .4f; C::xhCol[3] = 1.f;
+        C::xhDot = false; C::xhOutline = true;
         C::scopeOvr = false;
         C::fogOn = false; C::fogC[0] = .05f; C::fogC[1] = .05f; C::fogC[2] = .12f;
+        C::fogMode = 0; C::fogDensity = .025f;
         C::fogS = 200.f; C::fogE = 2500.f;
         C::nightMode = false; C::nightAlpha = .4f; C::noFlash = false;
         C::aim = false; C::silent = false; C::aimFov = 10.f; C::aimSmooth = 5.f;
