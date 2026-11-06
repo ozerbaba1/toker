@@ -1214,7 +1214,7 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
             if (button_at(t, "Open config folder", ImVec2(sx, by), bw)) {
                 char cmd[MAX_PATH + 32], d[MAX_PATH];
                 cfg::dir(d, MAX_PATH);
-                snprintf(cmd, sizeof(cmd), "explorer.exe \\"%s\\"", d);
+                snprintf(cmd, sizeof(cmd), "explorer.exe \"%s\"", d);
                 WinExec(cmd, SW_SHOWNORMAL);
             }
             if (button_at(t, "Copy diagnostics", ImVec2(sx + bw + sp, by), bw)) {
@@ -1231,7 +1231,7 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
             if (button_at(t, "Open config folder", ImVec2(sx, t.y), bw)) {
                 char cmd[MAX_PATH + 32], d[MAX_PATH];
                 cfg::dir(d, MAX_PATH);
-                snprintf(cmd, sizeof(cmd), "explorer.exe \\"%s\\"", d);
+                snprintf(cmd, sizeof(cmd), "explorer.exe \"%s\"", d);
                 WinExec(cmd, SW_SHOWNORMAL);
             }
             t.y += 36.f;
