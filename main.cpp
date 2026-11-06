@@ -234,31 +234,84 @@ static void __cdecl hkHPM(playermove_t*p,int s){G::pm=p;oHPM(p,s);}
 // ============================================================================
 typedef int(__cdecl*SDM_t)(int);static SDM_t oSDM=0;
 static int __cdecl hkSDM(int f){
-    // viewmodel xyz offset
+    // Avoid a GL state query on the common path where no local appearance
+    // effect is enabled.
+    const bool hasOffset = C::vmOfs[0]!=0.f || C::vmOfs[1]!=0.f || C::vmOfs[2]!=0.f;
+    if(!C::hand && !hasOffset) return oSDM(f);
+
+    // GoldSrc renders the local weapon/hands in a separate depth range.
+    // Keep every material pass confined to that local viewmodel path.
+    GLfloat dr[2]={0.f,1.f};
+    glGetFloatv(GL_DEPTH_RANGE,dr);
+    const bool isViewModel = dr[1] < 0.5f;
     bool pushed=false;
-    if(C::vmOfs[0]!=0||C::vmOfs[1]!=0||C::vmOfs[2]!=0){
-        GLfloat dr[2];glGetFloatv(GL_DEPTH_RANGE,dr);
-        if(dr[1]<0.5f){
-            glPushMatrix();
-            glTranslatef(C::vmOfs[0],C::vmOfs[1],C::vmOfs[2]);
-            pushed=true;
-        }
+
+    if(isViewModel && hasOffset){
+        glPushMatrix();
+        glTranslatef(C::vmOfs[0],C::vmOfs[1],C::vmOfs[2]);
+        pushed=true;
     }
-    if(C::hand){
-        GLfloat dr[2];glGetFloatv(GL_DEPTH_RANGE,dr);
-        if(dr[1]<0.5f){
-            glPushAttrib(GL_ALL_ATTRIB_BITS);
-            glDisable(GL_TEXTURE_2D);
-            glColor4f(C::handC[0],C::handC[1],C::handC[2],1);
-            if(C::handM==2){glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);glLineWidth(1.5f);}
-            int r=oSDM(f);glPopAttrib();
-            if(pushed)glPopMatrix();
-            return r;
-        }
+
+    if(!isViewModel || !C::hand){
+        const int r=oSDM(f);
+        if(pushed)glPopMatrix();
+        return r;
     }
-    int r=oSDM(f);
+
+    // Fixed-function lighting can override glColor. Disable it for the tint;
+    // GL_ALL_ATTRIB_BITS restores the game's state after these local passes.
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_TEXTURE_2D);
+    glDisable(GL_LIGHTING);
+    glEnable(GL_BLEND);
+
+    const float alpha=std::max(0.f,std::min(1.f,C::handAlpha));
+    const float pulse=(C::handM==3)
+        ? (.72f + .28f*(.5f + .5f*sinf((float)GetTickCount()*.0032f)))
+        : 1.f;
+    int result=0;
+
+    if(C::handM==0){
+        // Clean matte / flat material.
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha);
+        result=oSDM(f);
+    }else if(C::handM==1){
+        // Crisp wireframe.
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+        glLineWidth(C::handLineWidth);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha);
+        result=oSDM(f);
+    }else{
+        // Glass and Pulse: translucent body + broad additive edges +
+        // a narrow, brighter wire pass. Pulse animates only the local accent.
+        // Let the translucent base establish the model depth, then draw
+        // the luminous edge at equal depth without writing it again.
+        glDepthMask(GL_TRUE);
+        glPolygonMode(GL_FRONT_AND_BACK,GL_FILL);
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*(C::handM==2?.20f:.15f));
+        result=oSDM(f);
+
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LEQUAL);
+        glPolygonMode(GL_FRONT_AND_BACK,GL_LINE);
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE);
+        glLineWidth(std::min(5.f,C::handLineWidth*2.4f));
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*.28f*pulse);
+        result=oSDM(f);
+
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+        glLineWidth(C::handLineWidth);
+        glColor4f(C::handC[0],C::handC[1],C::handC[2],alpha*.92f*pulse);
+        result=oSDM(f);
+    }
+
+    glPopAttrib();
     if(pushed)glPopMatrix();
-    return r;
+    return result;
 }
 
 // ============================================================================
@@ -442,14 +495,26 @@ static void DrawESP(){
         }
     }
 
-    // custom crosshair
+    // custom crosshair — optional dark outline keeps the reticle readable
+    // without changing aim or target selection.
     if(C::xhair){
-        ImU32 xc=IM_COL32((int)(C::xhCol[0]*255),(int)(C::xhCol[1]*255),(int)(C::xhCol[2]*255),(int)(C::xhCol[3]*255));
-        float g=C::xhGap,s=C::xhSize,t=C::xhThick;
-        dl->AddLine(ImVec2(cx-g-s,cy),ImVec2(cx-g,cy),xc,t);
-        dl->AddLine(ImVec2(cx+g,cy),ImVec2(cx+g+s,cy),xc,t);
-        dl->AddLine(ImVec2(cx,cy-g-s),ImVec2(cx,cy-g),xc,t);
-        dl->AddLine(ImVec2(cx,cy+g),ImVec2(cx,cy+g+s),xc,t);
+        const float alpha=std::max(0.f,std::min(1.f,C::xhCol[3]));
+        ImU32 xc=IM_COL32((int)(C::xhCol[0]*255),(int)(C::xhCol[1]*255),
+                          (int)(C::xhCol[2]*255),(int)(alpha*255));
+        ImU32 oc=IM_COL32(5,6,8,(int)(alpha*210));
+        const float g=C::xhGap, len=C::xhSize, thick=C::xhThick;
+        auto stroke=[&](ImVec2 a,ImVec2 b){
+            if(C::xhOutline) dl->AddLine(a,b,oc,thick+2.2f);
+            dl->AddLine(a,b,xc,thick);
+        };
+        stroke(ImVec2(cx-g-len,cy),ImVec2(cx-g,cy));
+        stroke(ImVec2(cx+g,cy),ImVec2(cx+g+len,cy));
+        stroke(ImVec2(cx,cy-g-len),ImVec2(cx,cy-g));
+        stroke(ImVec2(cx,cy+g),ImVec2(cx,cy+g+len));
+        if(C::xhDot){
+            if(C::xhOutline) dl->AddCircleFilled(ImVec2(cx,cy),3.2f,oc,16);
+            dl->AddCircleFilled(ImVec2(cx,cy),std::max(1.2f,thick*.72f),xc,16);
+        }
     }
 
     // scope overlay: clean + with fading arms
@@ -562,9 +627,16 @@ static BOOL APIENTRY hkSB(HDC hdc){
     ImGui_ImplOpenGL2_RenderDrawData(ImGui::GetDrawData());
     glPopMatrix();glPopAttrib();glPopAttrib();
     BOOL r=oSB(hdc);
-    if(C::fogOn){glEnable(GL_FOG);glFogi(GL_FOG_MODE,GL_LINEAR);
-        glFogf(GL_FOG_START,C::fogS);glFogf(GL_FOG_END,C::fogE);
-        float fc[4]={C::fogC[0],C::fogC[1],C::fogC[2],1};glFogfv(GL_FOG_COLOR,fc);}
+    if(C::fogOn){
+        glEnable(GL_FOG);
+        const GLenum fogMode = C::fogMode==1 ? GL_EXP : (C::fogMode==2 ? GL_EXP2 : GL_LINEAR);
+        glFogi(GL_FOG_MODE,(GLint)fogMode);
+        glFogf(GL_FOG_DENSITY,C::fogDensity);
+        glFogf(GL_FOG_START,C::fogS);
+        glFogf(GL_FOG_END,C::fogE);
+        float fc[4]={C::fogC[0],C::fogC[1],C::fogC[2],1};
+        glFogfv(GL_FOG_COLOR,fc);
+    }
     else glDisable(GL_FOG);
     return r;}
 

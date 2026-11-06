@@ -70,65 +70,129 @@ inline unsigned g_backdrop_tex = 0;
 inline float g_last_rect[4] = { 0.f, 0.f, 0.f, 0.f };
 inline bool g_glass_live = false;
 
-inline void capture_backdrop() {
-    g_glass_live = false;
-    if (!C::glass) return;
-    if (g_last_rect[2] < 64.f || g_last_rect[3] < 64.f) return;
+inline int g_backdrop_tex_w = 0;
+inline int g_backdrop_tex_h = 0;
+inline DWORD g_backdrop_last_capture = 0;
 
-    ImVec2 ds = ImGui::GetIO().DisplaySize;
-    int sw = (int)ds.x, sh = (int)ds.y;
+inline void capture_backdrop() {
+    // A glass snapshot is intentionally refreshed at a bounded cadence.
+    // Readback is synchronous on legacy OpenGL, so doing it every frame can
+    // stall the game thread even when the texture itself is tiny.
+    if (!C::glass) { g_glass_live = false; return; }
+
+    const int quality = (C::glassQuality < 0 || C::glassQuality > 2) ? 1 : C::glassQuality;
+    const DWORD interval = quality == 0 ? 110u : (quality == 2 ? 34u : 66u);
+    const DWORD now = GetTickCount();
+    if (g_backdrop_last_capture && (DWORD)(now - g_backdrop_last_capture) < interval)
+        return;
+    g_backdrop_last_capture = now;
+    g_glass_live = false;
+
+    if (g_last_rect[2] < 64.f || g_last_rect[3] < 64.f) return;
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    const int sw = (int)ds.x, sh = (int)ds.y;
     if (sw <= 0 || sh <= 0) return;
 
     int x = (int)g_last_rect[0], y = (int)g_last_rect[1];
     int w = (int)g_last_rect[2], h = (int)g_last_rect[3];
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
+    if (x >= sw || y >= sh) return;
     if (x + w > sw) w = sw - x;
     if (y + h > sh) h = sh - y;
     if (w < 64 || h < 64) return;
 
-    int gy = sh - y - h;   // GL reads from the bottom-left corner
-    if (gy < 0) { h += gy; gy = 0; }
-    if (h < 64) return;
+    const int gy = sh - y - h;
+    if (gy < 0 || gy + h > sh) return;
 
-    static std::vector<unsigned char> raw, small;
-    const int step = 5;
-    int dw = w / step, dh = h / step;
+    static std::vector<unsigned char> raw, small, softened;
+    const int step = quality == 0 ? 7 : (quality == 2 ? 4 : 5);
+    const int dw = w / step, dh = h / step;
     if (dw < 8 || dh < 8) return;
 
-    raw.resize((size_t)w * h * 3);
+    // Preserve the host game's pixel-store and texture-binding state.
+    GLint oldPack = 4, oldUnpack = 4, oldTexture = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &oldPack);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &oldUnpack);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
+
+    raw.resize((size_t)w * (size_t)h * 3u);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(x, gy, w, h, GL_RGB, GL_UNSIGNED_BYTE, raw.data());
+    glPixelStorei(GL_PACK_ALIGNMENT, oldPack);
 
-    small.resize((size_t)dw * dh * 3);
+    small.resize((size_t)dw * (size_t)dh * 3u);
     const unsigned int div = (unsigned int)(step * step * 256);
-    for (int j = 0; j < dh; j++) {
-        for (int i = 0; i < dw; i++) {
+    for (int j = 0; j < dh; ++j) {
+        for (int i = 0; i < dw; ++i) {
             unsigned int acc = 0;
-            for (int yy = 0; yy < step; yy++) {
-                const unsigned char* row = raw.data() + ((size_t)(j * step + yy) * w + i * step) * 3;
-                for (int xx = 0; xx < step; xx++)
-                    acc += (unsigned)row[xx * 3] * 77u + (unsigned)row[xx * 3 + 1] * 151u +
-                           (unsigned)row[xx * 3 + 2] * 28u;
+            for (int yy = 0; yy < step; ++yy) {
+                const unsigned char* row = raw.data() +
+                    ((size_t)(j * step + yy) * (size_t)w + (size_t)(i * step)) * 3u;
+                for (int xx = 0; xx < step; ++xx) {
+                    const unsigned char* px = row + (size_t)xx * 3u;
+                    acc += (unsigned)px[0] * 77u + (unsigned)px[1] * 151u +
+                           (unsigned)px[2] * 28u;
+                }
             }
             int l = (int)(acc / div);
-            l = (int)(l * .78f) + 4;          // dim a touch, lift the blacks
+            l = (int)(l * .76f) + 5;
             if (l > 255) l = 255;
-            size_t o = ((size_t)j * dw + i) * 3;
-            small[o + 0] = (unsigned char)l;
+            const size_t o = ((size_t)j * (size_t)dw + (size_t)i) * 3u;
+            small[o] = (unsigned char)l;
             small[o + 1] = (unsigned char)std::min(255, l + 2);
             small[o + 2] = (unsigned char)std::min(255, l + 4);
         }
     }
 
+    // Small separable-style 3x3 Gaussian pass. It softens block boundaries
+    // without requiring a shader or another full-resolution framebuffer.
+    softened.resize(small.size());
+    for (int j = 0; j < dh; ++j) {
+        for (int i = 0; i < dw; ++i) {
+            for (int c = 0; c < 3; ++c) {
+                unsigned int sum = 0;
+                for (int yy = -1; yy <= 1; ++yy) {
+                    const int sy = std::max(0, std::min(dh - 1, j + yy));
+                    const unsigned int wy = (yy == 0) ? 2u : 1u;
+                    for (int xx = -1; xx <= 1; ++xx) {
+                        const int sx = std::max(0, std::min(dw - 1, i + xx));
+                        const unsigned int wx = (xx == 0) ? 2u : 1u;
+                        const size_t at = ((size_t)sy * (size_t)dw + (size_t)sx) * 3u + (size_t)c;
+                        sum += (unsigned int)small[at] * wx * wy;
+                    }
+                }
+                const size_t out = ((size_t)j * (size_t)dw + (size_t)i) * 3u + (size_t)c;
+                softened[out] = (unsigned char)((sum + 8u) / 16u);
+            }
+        }
+    }
+
     if (!g_backdrop_tex) glGenTextures(1, &g_backdrop_tex);
-    if (!g_backdrop_tex) return;
+    if (!g_backdrop_tex) {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)oldTexture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpack);
+        return;
+    }
+
     glBindTexture(GL_TEXTURE_2D, g_backdrop_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, dw, dh, 0, GL_RGB, GL_UNSIGNED_BYTE, small.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    if (g_backdrop_tex_w != dw || g_backdrop_tex_h != dh) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, dw, dh, 0, GL_RGB,
+                     GL_UNSIGNED_BYTE, softened.data());
+        g_backdrop_tex_w = dw;
+        g_backdrop_tex_h = dh;
+    } else {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, dw, dh, GL_RGB,
+                        GL_UNSIGNED_BYTE, softened.data());
+    }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindTexture(GL_TEXTURE_2D, (GLuint)oldTexture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpack);
     g_glass_live = true;
 }
 
@@ -138,24 +202,32 @@ inline ImTextureRef glass_tex() {
 
 // the outer window: shadow, blurred scene, darkening coat, sheen, hairlines
 inline void glass_shell(ImDrawList* dl, ImVec2 p0, ImVec2 p1, float r) {
-    for (int i = 8; i >= 1; i--) {
-        float g = i * 5.f;
-        dl->AddRectFilled(ImVec2(p0.x - g, p0.y - g + 2.f), ImVec2(p1.x + g, p1.y + g + 6.f),
-                          IM_COL32(0, 0, 0, (int)(8.f - i * .7f)), r + g * .7f);
+    // Layered ambient shadow: broad, quiet falloff rather than a neon halo.
+    for (int i = 10; i >= 1; --i) {
+        const float spread = 2.5f + i * 3.4f;
+        const int alpha = (int)(1.2f + (10 - i) * .48f);
+        dl->AddRectFilled(ImVec2(p0.x - spread, p0.y - spread + 3.f),
+                          ImVec2(p1.x + spread, p1.y + spread + 7.f),
+                          IM_COL32(0, 0, 0, alpha), r + spread);
     }
     if (g_glass_live && g_backdrop_tex) {
         dl->AddImageRounded(glass_tex(), p0, p1, ImVec2(0.f, 1.f), ImVec2(1.f, 0.f),
                             IM_COL32(255, 255, 255, 255), r);
-        dl->AddRectFilled(p0, p1, SHELL, r);
+        dl->AddRectFilled(p0, p1, scale_a(SHELL, clamp01(C::glassOpacity)), r);
     } else {
-        dl->AddRectFilled(p0, p1, IM_COL32(12, 13, 17, 246), r);
+        const int coat = (int)(224.f * clamp01(C::glassOpacity));
+        dl->AddRectFilled(p0, p1, IM_COL32(12, 13, 17, coat), r);
     }
     dl->AddRectFilledMultiColor(ImVec2(p0.x + r, p0.y + 1.f), ImVec2(p1.x - r, p0.y + 150.f),
                                 IM_COL32(255, 255, 255, 13), IM_COL32(255, 255, 255, 10),
                                 IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
-    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 30), r, 0, 1.f);
+    // Crisp inner hairline and restrained top-edge reflection.
+    dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 38), r, 0, 1.f);
     dl->AddRect(ImVec2(p0.x + 1.f, p0.y + 1.f), ImVec2(p1.x - 1.f, p1.y - 1.f),
-                IM_COL32(255, 255, 255, 9), r - 1.f, 0, 1.f);
+                IM_COL32(255, 255, 255, 12), r - 1.f, 0, 1.f);
+    dl->AddLine(ImVec2(p0.x + r + 8.f, p0.y + 1.5f),
+                ImVec2(p1.x - r - 8.f, p0.y + 1.5f),
+                IM_COL32(255, 255, 255, 24), 1.f);
 }
 
 // ---------------------------------------------------------------------------
@@ -314,9 +386,9 @@ inline Card card_begin(ImVec2 pos, float w, const char* title, const char* sub, 
     c.dl->ChannelsSetCurrent(1);
 
     // accent dot + title
-    c.dl->AddCircleFilled(ImVec2(pos.x + 18.f, pos.y + 22.f), 3.f, with_a(ACCENT_A, c.enabled ? .95f : .32f));
-    c.dl->AddCircle(ImVec2(pos.x + 18.f, pos.y + 22.f), 5.f, with_a(ACCENT_A, c.enabled ? .14f : .06f), 16, 1.f);
-    c.dl->AddText(f_bold, 14.5f, ImVec2(pos.x + 28.f, pos.y + 14.f), scale_a(TEXT, c.dim()), title);
+    c.dl->AddCircleFilled(ImVec2(pos.x + 18.f, pos.y + 22.f), 2.5f, with_a(ACCENT_A, c.enabled ? .92f : .28f));
+    c.dl->AddCircle(ImVec2(pos.x + 18.f, pos.y + 22.f), 6.f, with_a(ACCENT_A, c.enabled ? .10f : .035f), 20, 1.f);
+    c.dl->AddText(f_bold, 14.5f, ImVec2(pos.x + 30.f, pos.y + 14.f), scale_a(TEXT, c.dim()), title);
     if (sub) c.dl->AddText(f_small, 11.f, ImVec2(pos.x + 18.f, pos.y + 33.f), scale_a(DIM2, c.dim()), sub);
 
     if (toggle) {
@@ -336,11 +408,19 @@ inline float card_end(Card& c) {
     bool hov = ImGui::IsMouseHoveringRect(c.p0, p1);
 
     c.dl->ChannelsSetCurrent(0);
-    c.dl->AddRectFilled(c.p0, p1, hov ? CARD_HOV : CARD_BG, 12.f);
-    c.dl->AddRectFilledMultiColor(ImVec2(c.p0.x + 1.f, c.p0.y + 1.f), ImVec2(p1.x - 1.f, c.p0.y + 48.f),
-                                  IM_COL32(255, 255, 255, 9), IM_COL32(255, 255, 255, 6),
+    c.dl->AddRectFilled(c.p0, p1, hov ? CARD_HOV : CARD_BG, 15.f);
+    // Frosted card face: soft top sheen, lower glass tint and double hairline.
+    c.dl->AddRectFilledMultiColor(ImVec2(c.p0.x + 1.f, c.p0.y + 1.f),
+                                  ImVec2(p1.x - 1.f, c.p0.y + 66.f),
+                                  IM_COL32(255, 255, 255, 13), IM_COL32(255, 255, 255, 8),
                                   IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0));
-    c.dl->AddRect(c.p0, p1, hov ? IM_COL32(255, 255, 255, 42) : STROKE, 12.f, 0, 1.f);
+    c.dl->AddRectFilledMultiColor(ImVec2(c.p0.x + 1.f, c.p0.y + 66.f),
+                                  ImVec2(p1.x - 1.f, p1.y - 1.f),
+                                  IM_COL32(255, 255, 255, 0), IM_COL32(255, 255, 255, 0),
+                                  IM_COL32(0, 0, 0, 12), IM_COL32(0, 0, 0, 12));
+    c.dl->AddRect(c.p0, p1, hov ? IM_COL32(255, 255, 255, 48) : IM_COL32(255, 255, 255, 25), 15.f, 0, 1.f);
+    c.dl->AddRect(ImVec2(c.p0.x + 1.f, c.p0.y + 1.f), ImVec2(p1.x - 1.f, p1.y - 1.f),
+                  IM_COL32(255, 255, 255, 7), 14.f, 0, 1.f);
     c.dl->ChannelsMerge();
 
     ImGui::PopID();
@@ -818,9 +898,11 @@ struct State {
 // ---------------------------------------------------------------------------
 // pages
 // ---------------------------------------------------------------------------
+inline const char* k_glass_quality[] = { "Performance", "Balanced", "Smooth" };
+inline const char* k_fog_modes[] = { "Linear", "Exponential", "Exponential squared" };
 inline const char* k_esp_styles[] = { "Box", "Corner" };
 inline const char* k_chams[] = { "Off", "Flat", "Wire", "Glow", "Rainbow" };
-inline const char* k_hand[] = { "Flat", "Wire" };
+inline const char* k_hand[] = { "Flat", "Wire", "Glass", "Pulse" };
 inline const char* k_bone[] = { "Head", "Body" };
 inline const char* k_part[] = { "Any", "Head", "Body" };
 
@@ -852,8 +934,9 @@ inline void fps_graph(ImDrawList* dl, ImVec2 p, float w, float h, ImU32 col) {
 
 inline void page_visuals(ImVec2 o, float full) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
-    const float xl = o.x, xr = o.x + colw + gap;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float xl = o.x, xr = stacked ? o.x : o.x + colw + gap;
     float yl = o.y, yr = o.y;
 
     Card a = card_begin(ImVec2(xl, yl), colw, "ESP", "player boxes & info", &C::esp);
@@ -870,6 +953,7 @@ inline void page_visuals(ImVec2 o, float full) {
     section_label(a, "TEAM COLORS");
     color_pair(a, "Terrorist", C::ecT, "Counter", C::ecCT);
     yl = card_end(a) + gap;
+    if (stacked) yr = yl;
 
     bool ch_on = C::chMode > 0;
     Card b = card_begin(ImVec2(xr, yr), colw, "Chams", "player shading", &ch_on);
@@ -880,18 +964,62 @@ inline void page_visuals(ImVec2 o, float full) {
     color_pair(b, "T visible", C::chTV, "T wall", C::chTW);
     color_pair(b, "CT visible", C::chCV, "CT wall", C::chCW);
     yr = card_end(b) + gap;
+    if (stacked) yl = yr;
 
     Card c = card_begin(ImVec2(xl, yl), colw, "ViewModel", "hands & offset", &C::hand);
-    combo_row(c, "Style", &C::handM, k_hand, 2);
-    color_row(c, "Hand color", C::handC);
+    combo_row(c, "Material", &C::handM, k_hand, 4);
+    color_row(c, "Tint", C::handC);
+    slider_row(c, "Opacity", &C::handAlpha, .05f, 1.f, "%.2f");
+    if (C::handM != 0)
+        slider_row(c, "Edge width", &C::handLineWidth, .5f, 5.f, "%.1f");
+    if (C::handM >= 2) {
+        c.dl->AddText(f_small, 10.f, ImVec2(c.x(), c.py()+2.f), DIM2,
+                      C::handM==3 ? "soft pulse / dual-pass glass" : "translucent fill / luminous edges");
+        c.y += 17.f;
+    }
     drag3_row(c, "XYZ offset", C::vmOfs, -5.f, 5.f, .05f);
     yl = card_end(c) + gap;
+    if (stacked) yr = yl;
 
-    Card d = card_begin(ImVec2(xr, yr), colw, "Crosshair", "custom crosshair", &C::xhair);
+    Card d = card_begin(ImVec2(xr, yr), colw, "Crosshair", "reticle appearance", &C::xhair);
     slider_row(d, "Length", &C::xhSize, 1.f, 20.f, "%.1f");
     slider_row(d, "Gap", &C::xhGap, 0.f, 10.f, "%.1f");
     slider_row(d, "Thickness", &C::xhThick, .5f, 4.f, "%.1f");
     color_row(d, "Color", C::xhCol, true);
+    check_row(d, "Center dot", &C::xhDot);
+    check_row(d, "Dark outline", &C::xhOutline);
+    section_label(d, "LIVE PREVIEW");
+    {
+        const float pw = d.cw();
+        const float ph = 62.f;
+        const ImVec2 pp(d.x(), d.py());
+        d.dl->AddRectFilled(pp, ImVec2(pp.x + pw, pp.y + ph),
+                            IM_COL32(8, 9, 12, 175), 9.f);
+        d.dl->AddRect(pp, ImVec2(pp.x + pw, pp.y + ph),
+                      IM_COL32(255, 255, 255, 20), 9.f, 0, 1.f);
+        const float px = pp.x + pw * .5f, py = pp.y + ph * .5f;
+        const float gapPreview = std::min(12.f, C::xhGap * .7f);
+        const float lenPreview = std::min(24.f, C::xhSize * 1.15f);
+        const float thickPreview = std::max(1.f, C::xhThick);
+        const float alphaPreview = clamp01(C::xhCol[3]);
+        const ImU32 preview = IM_COL32((int)(C::xhCol[0] * 255),
+            (int)(C::xhCol[1] * 255), (int)(C::xhCol[2] * 255),
+            (int)(alphaPreview * 255));
+        const ImU32 outline = IM_COL32(0, 0, 0, (int)(alphaPreview * 220));
+        auto previewLine = [&](ImVec2 a, ImVec2 b) {
+            if (C::xhOutline) d.dl->AddLine(a, b, outline, thickPreview + 2.f);
+            d.dl->AddLine(a, b, preview, thickPreview);
+        };
+        previewLine(ImVec2(px-gapPreview-lenPreview,py),ImVec2(px-gapPreview,py));
+        previewLine(ImVec2(px+gapPreview,py),ImVec2(px+gapPreview+lenPreview,py));
+        previewLine(ImVec2(px,py-gapPreview-lenPreview),ImVec2(px,py-gapPreview));
+        previewLine(ImVec2(px,py+gapPreview),ImVec2(px,py+gapPreview+lenPreview));
+        if (C::xhDot) {
+            if (C::xhOutline) d.dl->AddCircleFilled(ImVec2(px,py),3.f,outline,16);
+            d.dl->AddCircleFilled(ImVec2(px,py),std::max(1.f,thickPreview*.7f),preview,16);
+        }
+        d.y += ph + 9.f;
+    }
     yr = card_end(d) + gap;
 
     ImGui::SetCursorScreenPos(ImVec2(o.x, std::max(yl, yr)));
@@ -899,7 +1027,9 @@ inline void page_visuals(ImVec2 o, float full) {
 
 inline void page_aim(ImVec2 o, float full, State& st) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Aimbot", "target selection", &C::aim);
@@ -911,14 +1041,16 @@ inline void page_aim(ImVec2 o, float full, State& st) {
     check_row(a, "Visibility check", &C::aimVis);
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Triggerbot", "auto fire", &C::trig);
+    const float secondY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, secondY), colw, "Triggerbot", "auto fire", &C::trig);
     slider_row(b, "FOV", &C::trigFov, .5f, 10.f, "%.1f", "\xC2\xB0");
     slider_row_i(b, "Delay", &C::trigDelay, 0, 200);
     combo_row(b, "Part", &C::trigPart, k_part, 3);
     float bb1 = card_end(b);
 
     float y2 = bb1 + gap;
-    Card d = card_begin(ImVec2(o.x + colw + gap, y2), colw, "Recoil", "punch compensation", &C::rcs);
+    const float thirdY = stacked ? bb1 + gap : y2;
+    Card d = card_begin(ImVec2(secondX, thirdY), colw, "Recoil", "punch compensation", &C::rcs);
     slider_row(d, "Factor", &C::rcsF, 0.f, 3.f, "%.2f");
     d.dl->AddText(f_mono, 10.f, ImVec2(d.x(), d.py() + 1.f), scale_a(DIM2, d.dim()), "source  pm->punchangle");
     d.y += 16.f;
@@ -936,21 +1068,29 @@ inline void page_aim(ImVec2 o, float full, State& st) {
 
 inline void page_world(ImVec2 o, float full) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Environment", "fog & lighting", nullptr);
     check_row(a, "Fog", &C::fogOn);
     color_row(a, "Fog color", C::fogC);
-    slider_row(a, "Start", &C::fogS, 0.f, 2000.f, "%.0f");
-    slider_row(a, "End", &C::fogE, 500.f, 8000.f, "%.0f");
+    combo_row(a, "Fog model", &C::fogMode, k_fog_modes, 3);
+    if (C::fogMode == 0) {
+        slider_row(a, "Start", &C::fogS, 0.f, 2000.f, "%.0f");
+        slider_row(a, "End", &C::fogE, 500.f, 8000.f, "%.0f");
+    } else {
+        slider_row(a, "Density", &C::fogDensity, .001f, .15f, "%.3f");
+    }
     section_label(a, "LIGHTING");
     check_row(a, "Night mode", &C::nightMode);
     slider_row(a, "Darkness", &C::nightAlpha, .1f, .8f, "%.2f");
     check_row(a, "No flash", &C::noFlash);
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Effects", "tracers & overlays", nullptr);
+    const float effectsY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, effectsY), colw, "Effects", "tracers & overlays", nullptr);
     check_row(b, "Bullet tracers", &C::btrace);
     color_row(b, "Tracer color", C::btCol);
     section_label(b, "TRAIL");
@@ -960,7 +1100,8 @@ inline void page_world(ImVec2 o, float full) {
     check_row(b, "No damage flash", &C::dmgFlash);
     float bb = card_end(b);
 
-    Card r = card_begin(ImVec2(o.x + colw + gap, bb + gap), colw, "Radar", "2d player radar", &C::radar);
+    const float radarY = bb + gap;
+    Card r = card_begin(ImVec2(secondX, radarY), colw, "Radar", "2d player radar", &C::radar);
     check_row(r, "Enemies only", &C::radarEnemies, "hide teammates on the radar");
     slider_row(r, "Range", &C::radarRange, 400.f, 4000.f, "%.0f");
     slider_row(r, "Size", &C::radarSize, 90.f, 220.f, "%.0f", " px");
@@ -972,7 +1113,9 @@ inline void page_world(ImVec2 o, float full) {
 
 inline void page_misc(ImVec2 o, float full, State& st) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Movement", "input helpers", nullptr);
@@ -981,10 +1124,15 @@ inline void page_misc(ImVec2 o, float full, State& st) {
     check_row(a, "Auto pistol", &C::autoPistol, "pulse semi-auto fire");
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "Interface", "overlay options", nullptr);
+    const float interfaceY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, interfaceY), colw, "Interface", "overlay options", nullptr);
     check_row(b, "Watermark", &C::watermark);
     check_row(b, "Frosted glass", &C::glass, "blur the scene behind the menu");
-    check_row(b, "Reduce motion", &C::reduceMotion, "snappier transitions");
+    if (C::glass) {
+        slider_row(b, "Glass opacity", &C::glassOpacity, .45f, 1.f, "%.2f");
+        combo_row(b, "Backdrop quality", &C::glassQuality, k_glass_quality, 3);
+    }
+    check_row(b, "Reduce motion", &C::reduceMotion, "shorter transitions");
     keybind_row(b, "Menu key", &C::menuKey);
     float bb = card_end(b);
 
@@ -1025,7 +1173,9 @@ inline void page_misc(ImVec2 o, float full, State& st) {
 
 inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool* load_click, bool* reset_click) {
     const float gap = 10.f;
-    const float colw = (full - gap) * .5f;
+    const bool stacked = full < 520.f;
+    const float colw = stacked ? full : (full - gap) * .5f;
+    const float secondX = stacked ? o.x : o.x + colw + gap;
     float y = o.y;
 
     Card a = card_begin(ImVec2(o.x, y), colw, "Persistence", "toker_cs16.cfg", nullptr);
@@ -1039,7 +1189,8 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
     a.y += 16.f;
     float ba = card_end(a);
 
-    Card b = card_begin(ImVec2(o.x + colw + gap, y), colw, "About", "toker cs 1.6", nullptr);
+    const float aboutY = stacked ? ba + gap : y;
+    Card b = card_begin(ImVec2(secondX, aboutY), colw, "About", "toker cs 1.6", nullptr);
     kv_row(b, "build", st.build ? st.build : "2.0");
     kv_row(b, "target", "GoldSrc / protocol 48");
     kv_row(b, "engine", st.eng ? "attached" : "waiting");
@@ -1054,24 +1205,46 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
 
     Card t = card_begin(ImVec2(o.x, y), full, "Tools", "quick actions", nullptr);
     {
-        float bw = 170.f, sp = 10.f;
-        float total = bw * 3.f + sp * 2.f;
-        float sx = t.x() + (t.cw() - total) * .5f;
-        float by = t.py();
-        if (button_at(t, "Open config folder", ImVec2(sx, by), bw)) {
-            char cmd[MAX_PATH + 32], d[MAX_PATH];
-            cfg::dir(d, MAX_PATH);
-            snprintf(cmd, sizeof(cmd), "explorer.exe \"%s\"", d);
-            WinExec(cmd, SW_SHOWNORMAL);
+        const float sp = 8.f;
+        const float by = t.py();
+        if (t.cw() >= 530.f) {
+            const float bw = 170.f;
+            const float total = bw * 3.f + sp * 2.f;
+            const float sx = t.x() + (t.cw() - total) * .5f;
+            if (button_at(t, "Open config folder", ImVec2(sx, by), bw)) {
+                char cmd[MAX_PATH + 32], d[MAX_PATH];
+                cfg::dir(d, MAX_PATH);
+                snprintf(cmd, sizeof(cmd), "explorer.exe \"%s\"", d);
+                WinExec(cmd, SW_SHOWNORMAL);
+            }
+            if (button_at(t, "Copy diagnostics", ImVec2(sx + bw + sp, by), bw)) {
+                char dg[256];
+                snprintf(dg, sizeof(dg), "toker build %s | eng 0x%X pm 0x%X si 0x%X | %d players | %.0f fps",
+                         st.build ? st.build : "?", st.eng_addr, st.pm_addr, st.si_addr, st.players, st.fps);
+                copy_clip(dg);
+            }
+            if (button_at(t, "Reload config", ImVec2(sx + (bw + sp) * 2.f, by), bw)) cfg::load();
+            t.y += 38.f;
+        } else {
+            const float bw = std::min(220.f, t.cw());
+            const float sx = t.x() + (t.cw() - bw) * .5f;
+            if (button_at(t, "Open config folder", ImVec2(sx, t.y), bw)) {
+                char cmd[MAX_PATH + 32], d[MAX_PATH];
+                cfg::dir(d, MAX_PATH);
+                snprintf(cmd, sizeof(cmd), "explorer.exe \"%s\"", d);
+                WinExec(cmd, SW_SHOWNORMAL);
+            }
+            t.y += 36.f;
+            if (button_at(t, "Copy diagnostics", ImVec2(sx, t.y), bw)) {
+                char dg[256];
+                snprintf(dg, sizeof(dg), "toker build %s | eng 0x%X pm 0x%X si 0x%X | %d players | %.0f fps",
+                         st.build ? st.build : "?", st.eng_addr, st.pm_addr, st.si_addr, st.players, st.fps);
+                copy_clip(dg);
+            }
+            t.y += 36.f;
+            if (button_at(t, "Reload config", ImVec2(sx, t.y), bw)) cfg::load();
+            t.y += 36.f;
         }
-        if (button_at(t, "Copy diagnostics", ImVec2(sx + bw + sp, by), bw)) {
-            char dg[256];
-            snprintf(dg, sizeof(dg), "toker build %s | eng 0x%X pm 0x%X si 0x%X | %d players | %.0f fps",
-                     st.build ? st.build : "?", st.eng_addr, st.pm_addr, st.si_addr, st.players, st.fps);
-            copy_clip(dg);
-        }
-        if (button_at(t, "Reload config", ImVec2(sx + (bw + sp) * 2.f, by), bw)) cfg::load();
-        t.y += 38.f;
     }
     float bt = card_end(t);
 
@@ -1082,13 +1255,13 @@ inline void page_config(ImVec2 o, float full, State& st, bool* save_click, bool*
 // ---------------------------------------------------------------------------
 // menu
 // ---------------------------------------------------------------------------
-inline const char* k_pages[] = { "Visuals", "Aim", "World", "Misc", "Config" };
+inline const char* k_pages[] = { "Visuals", "Aim", "World", "Interface", "Profiles" };
 inline const char* k_subs[] = {
-    "esp, chams, crosshair, viewmodel",
-    "aimbot, triggerbot, recoil",
-    "fog, lighting, radar, effects",
-    "movement, interface, data center",
-    "save, load, build info",
+    "render settings and appearance",
+    "input controls and sensitivity",
+    "atmosphere and environment",
+    "overlay, motion and telemetry",
+    "save, load and preferences",
 };
 
 inline int& page_index() { static int p = 0; return p; }
@@ -1122,7 +1295,8 @@ inline void draw(State& st, bool* open) {
     ImVec2 ws = ImGui::GetWindowSize();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    const float RAIL = 224.f;
+    // Give the content area more room on narrow GoldSrc resolutions.
+    const float RAIL = ws.x < 820.f ? 188.f : 224.f;
     const float HEAD = 84.f;
 
     // shell: real blurred backdrop + glass coats
@@ -1188,9 +1362,10 @@ inline void draw(State& st, bool* open) {
             dl->AddText(f_small, 8.5f, ImVec2(x, by + 32.f), DIM2, lab);
             dl->AddText(f_bold, 15.f, ImVec2(x, by + 44.f), TEXT, val);
         };
+        const float statCol = (RAIL - 52.f) / 3.f;
         snprintf(sv, sizeof(sv), "%.0f", st.fps);      stat(wp.x + 26.f, "FPS", sv);
-        snprintf(sv, sizeof(sv), "%d", st.players);    stat(wp.x + 90.f, "PLAYERS", sv);
-        snprintf(sv, sizeof(sv), "%.0f", st.speed);    stat(wp.x + 162.f, "SPEED", sv);
+        snprintf(sv, sizeof(sv), "%d", st.players);    stat(wp.x + 26.f + statCol, "PLAYERS", sv);
+        snprintf(sv, sizeof(sv), "%.0f", st.speed);    stat(wp.x + 26.f + statCol * 2.f, "SPEED", sv);
 
         fps_graph(dl, ImVec2(wp.x + 26.f, by + 76.f), RAIL - 52.f, 36.f, TEXT);
         }
@@ -1202,7 +1377,7 @@ inline void draw(State& st, bool* open) {
         dl->AddText(f_small, 10.5f, ImVec2(wp.x + 38.f, fy + 13.f), DIM,
                     st.eng ? "engine attached" : "waiting for engine");
         dl->AddText(f_small, 9.f, ImVec2(wp.x + 27.f, fy + 31.f), DIM2,
-                    "build 2.1   \xC2\xB7   kindmops");
+                    "TOKER  /  GLASS INTERFACE");
     }
 
     // header
@@ -1260,12 +1435,31 @@ inline void draw(State& st, bool* open) {
     ImVec2 o = ImGui::GetCursorScreenPos();
     float full = ImGui::GetContentRegionAvail().x;
 
+    // A quiet veil reveals each page with a short, non-blocking fade.
+    static int previous_page = -1;
+    static float page_reveal = 1.f;
+    if (previous_page != page) {
+        previous_page = page;
+        page_reveal = 0.f;
+    }
+    const float page_dt = std::min(.1f, io.DeltaTime);
+    page_reveal += (1.f - page_reveal) * std::min(1.f, page_dt * (C::reduceMotion ? 24.f : 10.f));
+    o.x += (1.f - page_reveal) * (C::reduceMotion ? 2.f : 7.f);
+
     switch (page) {
     case 0: page_visuals(o, full); break;
     case 1: page_aim(o, full, st); break;
     case 2: page_world(o, full); break;
     case 3: page_misc(o, full, st); break;
     default: page_config(o, full, st, &save_click, &load_click, &reset_click); break;
+    }
+
+    if (page_reveal < .995f) {
+        ImDrawList* page_dl = ImGui::GetWindowDrawList();
+        const ImVec2 child_min = ImGui::GetWindowPos();
+        const ImVec2 child_max = child_min + ImGui::GetWindowSize();
+        page_dl->AddRectFilled(child_min, child_max,
+            IM_COL32(10, 11, 14, (int)(170.f * (1.f - page_reveal))), 10.f);
     }
 
     ImGui::SetCursorScreenPos(ImGui::GetCursorScreenPos());
