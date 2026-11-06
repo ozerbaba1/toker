@@ -237,6 +237,7 @@ namespace cfg {
         fclose(f);
         if (C::menuKey <= 0 || C::menuKey > 255) C::menuKey = VK_INSERT;
         if (C::glassQuality < 0 || C::glassQuality > 2) C::glassQuality = 1;
+        if (C::handM < 0 || C::handM > 3) C::handM = 0;
         if (C::glassOpacity < .45f) C::glassOpacity = .45f;
         if (C::glassOpacity > 1.f) C::glassOpacity = 1.f;
         if (C::fogMode < 0 || C::fogMode > 2) C::fogMode = 0;
