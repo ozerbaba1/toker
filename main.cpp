@@ -234,12 +234,16 @@ static void __cdecl hkHPM(playermove_t*p,int s){G::pm=p;oHPM(p,s);}
 // ============================================================================
 typedef int(__cdecl*SDM_t)(int);static SDM_t oSDM=0;
 static int __cdecl hkSDM(int f){
+    // Avoid a GL state query on the common path where no local appearance
+    // effect is enabled.
+    const bool hasOffset = C::vmOfs[0]!=0.f || C::vmOfs[1]!=0.f || C::vmOfs[2]!=0.f;
+    if(!C::hand && !hasOffset) return oSDM(f);
+
     // GoldSrc renders the local weapon/hands in a separate depth range.
     // Keep every material pass confined to that local viewmodel path.
     GLfloat dr[2]={0.f,1.f};
     glGetFloatv(GL_DEPTH_RANGE,dr);
     const bool isViewModel = dr[1] < 0.5f;
-    const bool hasOffset = C::vmOfs[0]!=0.f || C::vmOfs[1]!=0.f || C::vmOfs[2]!=0.f;
     bool pushed=false;
 
     if(isViewModel && hasOffset){
